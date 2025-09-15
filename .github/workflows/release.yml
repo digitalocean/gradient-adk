@@ -115,7 +115,7 @@ jobs:
 
     - name: Create Release
       id: create_release
-      uses: actions/create-release@v1
+      uses: do-actions/get-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -158,7 +158,7 @@ jobs:
         prerelease: false
 
     - name: Upload Linux Release Asset
-      uses: actions/upload-release-asset@v1
+      uses: do-actions/get-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -168,7 +168,7 @@ jobs:
         asset_content_type: application/octet-stream
 
     - name: Upload macOS Intel Release Asset
-      uses: actions/upload-release-asset@v1
+      uses: do-actions/get-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -178,7 +178,7 @@ jobs:
         asset_content_type: application/octet-stream
 
     - name: Upload macOS ARM Release Asset
-      uses: actions/upload-release-asset@v1
+      uses: do-actions/get-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
@@ -188,7 +188,7 @@ jobs:
         asset_content_type: application/octet-stream
 
     - name: Upload Windows Release Asset
-      uses: actions/upload-release-asset@v1
+      uses: do-actions/get-gh-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
