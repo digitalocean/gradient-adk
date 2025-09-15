@@ -114,17 +114,10 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
       GITHUB_SERVER_URL: "github.internal.digitalocean.com"
+      GH_HOST: "github.internal.digitalocean.com"
 
     steps:
       - uses: actions/checkout@v4
-
-      # Tell gh which GHES host to use (and auth non-interactively)
-      - name: Authenticate gh to GHES
-        shell: bash
-        run: |
-          HOST="${GITHUB_SERVER_URL#https://}"
-          printf "%s" "$GH_TOKEN" | gh auth login --hostname "$HOST" --with-token
-          gh auth status
 
       - name: Download all artifacts
         uses: actions/download-artifact@v3
