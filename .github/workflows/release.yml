@@ -112,7 +112,7 @@ jobs:
       contents: write
 
     env:
-      GH_TOKEN: ${{ github.token }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       GITHUB_SERVER_URL: "github.internal.digitalocean.com"
       GH_HOST: "github.internal.digitalocean.com"
 
