@@ -1,0 +1,166 @@
+name: Build and Release CLI
+
+on:
+  push:
+    tags:
+      - 'v*'  # Trigger on version tags like v1.0.0, v2.1.0, etc.
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: linux
+            artifact_name: gradient-linux-x86_64
+            asset_name: gradient-linux-x86_64
+          - os: windows-latest
+            target: windows
+            artifact_name: gradient-windows-x86_64.exe
+            asset_name: gradient-windows-x86_64.exe
+          - os: macos-latest
+            target: macos
+            artifact_name: gradient-macos-x86_64
+            asset_name: gradient-macos-x86_64
+          - os: macos-14  # M1 runner
+            target: macos-arm64
+            artifact_name: gradient-macos-arm64
+            asset_name: gradient-macos-arm64
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pyinstaller
+        pip install -e .
+
+    - name: Download doctl binaries
+      run: |
+        chmod +x download_doctl.sh
+        ./download_doctl.sh
+
+    - name: Build executable
+      run: |
+        pyinstaller gradient.spec --distpath dist --name ${{ matrix.artifact_name }}
+
+    - name: Rename executable 
+      shell: bash
+      run: |
+        if [ "${{ matrix.target }}" == "windows" ]; then
+          mv dist/gradient.exe dist/${{ matrix.artifact_name }}
+        else
+          mv dist/gradient dist/${{ matrix.artifact_name }}
+        fi
+
+    - name: Test executable
+      shell: bash
+      run: |
+        chmod +x dist/${{ matrix.artifact_name }} || true
+        ./dist/${{ matrix.artifact_name }} --help
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.artifact_name }}
+        path: dist/${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref_name }}
+        release_name: Gradient CLI ${{ github.ref_name }}
+        body: |
+          ## Gradient CLI ${{ github.ref_name }}
+          
+          ### What's New
+          - Standalone executables with embedded doctl binary for all platforms
+          - No external dependencies required - fully self-contained
+          
+          ### Installation
+          
+          Download the appropriate binary for your platform:
+          
+          - **Linux (x86_64)**: `gradient-linux-x86_64`
+          - **macOS (Intel)**: `gradient-macos-x86_64`  
+          - **macOS (Apple Silicon)**: `gradient-macos-arm64`
+          - **Windows (x86_64)**: `gradient-windows-x86_64.exe`
+          
+          ### Usage
+          
+          1. Download the binary for your platform
+          2. Make it executable (Linux/Mac): `chmod +x gradient-*`
+          3. Run: `./gradient-* --help` (or `gradient-windows-x86_64.exe --help` on Windows)
+          
+          ### Quick Start
+          
+          ```bash
+          # Initialize an agent
+          ./gradient-* agent init
+          
+          # Run the agent locally
+          ./gradient-* agent run
+          ```
+          
+          For full documentation, see [USAGE.md](https://github.com/${{ github.repository }}/blob/main/USAGE.md).
+        draft: false
+        prerelease: false
+
+    - name: Upload Linux Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: gradient-linux-x86_64/gradient-linux-x86_64
+        asset_name: gradient-linux-x86_64
+        asset_content_type: application/octet-stream
+
+    - name: Upload macOS Intel Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: gradient-macos-x86_64/gradient-macos-x86_64
+        asset_name: gradient-macos-x86_64
+        asset_content_type: application/octet-stream
+
+    - name: Upload macOS ARM Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: gradient-macos-arm64/gradient-macos-arm64
+        asset_name: gradient-macos-arm64
+        asset_content_type: application/octet-stream
+
+    - name: Upload Windows Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ steps.create_release.outputs.upload_url }}
+        asset_path: gradient-windows-x86_64.exe/gradient-windows-x86_64.exe
+        asset_name: gradient-windows-x86_64.exe
+        asset_content_type: application/octet-stream
