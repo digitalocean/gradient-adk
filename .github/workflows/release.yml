@@ -113,7 +113,7 @@ jobs:
 
     env:
       GH_TOKEN: ${{ github.token }}
-      GITHUB_SERVER_URL: ${{ github.server_url }}
+      GITHUB_SERVER_URL: "github.internal.digitalocean.com"
 
     steps:
       - uses: actions/checkout@v4
