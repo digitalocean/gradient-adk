@@ -156,12 +156,16 @@ jobs:
           EOF
           ls -l release_notes.md
 
-      - name: Create Release (generate notes)
+      - name: Create Release with GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_HOST: github.internal.digitalocean.com
         run: |
           gh release create "${{ github.ref_name }}" \
+            --hostname "$GH_HOST" \
             --repo "${{ github.repository }}" \
             --title "Gradient CLI ${{ github.ref_name }}" \
-            --generate-notes \
+            --notes-file release_notes.md \
             gradient-linux-x86_64/gradient-linux-x86_64 \
             gradient-macos-x86_64/gradient-macos-x86_64 \
             gradient-macos-arm64/gradient-macos-arm64 \
