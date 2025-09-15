@@ -108,59 +108,34 @@ jobs:
     needs: build
     runs-on: prod
     if: startsWith(github.ref, 'refs/tags/')
-    
+    permissions:
+      contents: write
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Download all artifacts
-      uses: actions/download-artifact@v3
+      - uses: actions/checkout@v4
 
-    - name: Create Release with GitHub CLI
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      run: |
-        # Create release notes
-        cat > release_notes.md << 'EOF'
-        ## Gradient CLI ${{ github.ref_name }}
-        
-        ### What's New
-        - Standalone executables with embedded doctl binary for all platforms
-        - No external dependencies required - fully self-contained
-        
-        ### Installation
-        
-        Download the appropriate binary for your platform:
-        
-        - **Linux (x86_64)**: `gradient-linux-x86_64`
-        - **macOS (Intel)**: `gradient-macos-x86_64`  
-        - **macOS (Apple Silicon)**: `gradient-macos-arm64`
-        - **Windows (x86_64)**: `gradient-windows-x86_64.exe`
-        
-        ### Usage
-        
-        1. Download the binary for your platform
-        2. Make it executable (Linux/Mac): `chmod +x gradient-*`
-        3. Run: `./gradient-* --help` (or `gradient-windows-x86_64.exe --help` on Windows)
-        
-        ### Quick Start
-        
-        ```bash
-        # Initialize an agent
-        ./gradient-* agent init
-        
-        # Run the agent locally
-        ./gradient-* agent run
-        ```
-        
-        For full documentation, see [USAGE.md](https://github.com/${{ github.repository }}/blob/main/USAGE.md).
-        EOF
-        
-        # Create the release with all assets
-        gh release create ${{ github.ref_name }} \
-          --title "Gradient CLI ${{ github.ref_name }}" \
-          --notes-file release_notes.md \
-          gradient-linux-x86_64/gradient-linux-x86_64 \
-          gradient-macos-x86_64/gradient-macos-x86_64 \
-          gradient-macos-arm64/gradient-macos-arm64 \
-          gradient-windows-x86_64.exe/gradient-windows-x86_64.exe
+      - name: Authenticate gh to GHES
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_SERVER_URL: ${{ github.server_url }}
+        run: |
+          HOST="${GITHUB_SERVER_URL#https://}"
+          printf "%s" "$GH_TOKEN" | gh auth login --hostname "$HOST" --with-token
+          gh auth status
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v3
+
+      - name: Create Release with GitHub CLI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # (your release_notes.md creation here)
+
+          gh release create "${{ github.ref_name }}" \
+            --repo "${{ github.repository }}" \
+            --title "Gradient CLI ${{ github.ref_name }}" \
+            --notes-file release_notes.md \
+            gradient-linux-x86_64/gradient-linux-x86_64 \
+            gradient-macos-x86_64/gradient-macos-x86_64 \
+            gradient-macos-arm64/gradient-macos-arm64 \
+            gradient-windows-x86_64.exe/gradient-windows-x86_64.exe
