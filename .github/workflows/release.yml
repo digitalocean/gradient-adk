@@ -51,13 +51,45 @@ jobs:
       run: |
         pyinstaller gradient.spec --distpath dist
 
+    - name: Debug - List created files
+      shell: bash
+      run: |
+        echo "Files in dist directory:"
+        ls -la dist/
+        echo "Looking for gradient executables:"
+        find dist/ -name "*gradient*" -type f
+
     - name: Rename executable 
       shell: bash
       run: |
+        echo "Target: ${{ matrix.target }}"
+        echo "Artifact name: ${{ matrix.artifact_name }}"
+        
         if [ "${{ matrix.target }}" == "windows" ]; then
-          mv dist/gradient.exe dist/${{ matrix.artifact_name }}
+          # On Windows, PyInstaller creates .exe regardless of spec name
+          if [ -f "dist/gradient.exe" ]; then
+            echo "Found dist/gradient.exe, renaming to ${{ matrix.artifact_name }}"
+            mv dist/gradient.exe dist/${{ matrix.artifact_name }}
+          elif [ -f "dist/gradient" ]; then
+            echo "Found dist/gradient, renaming to ${{ matrix.artifact_name }}"
+            mv dist/gradient dist/${{ matrix.artifact_name }}
+          else
+            echo "ERROR: No gradient executable found!"
+            echo "Available files in dist/:"
+            ls -la dist/
+            exit 1
+          fi
         else
-          mv dist/gradient dist/${{ matrix.artifact_name }}
+          # Unix systems
+          if [ -f "dist/gradient" ]; then
+            echo "Found dist/gradient, renaming to ${{ matrix.artifact_name }}"
+            mv dist/gradient dist/${{ matrix.artifact_name }}
+          else
+            echo "ERROR: No gradient executable found!"
+            echo "Available files in dist/:"
+            ls -la dist/
+            exit 1
+          fi
         fi
 
     - name: Test executable
