@@ -5,7 +5,7 @@ Gradient Agent - Python SDK for building and instrumenting AI agents.
 from .decorator import entrypoint, get_app, run_server
 from .runtime import get_runtime_manager
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     "entrypoint",
