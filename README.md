@@ -1,28 +1,50 @@
-# Gradient CLI
+# Gradient Agent (SDK + CLI)
 
-`gradient` is a CLI that enables you to create, test, and deploy agents on DigitalOcean's Gradient™ AI platform.
+`gradient-agent` is a unified Python package that provides:
 
-## Quick Install
+* An SDK with the `@entrypoint` decorator and runtime instrumentation
+* The `gradient` CLI for auth, agent init, and local run
 
-## Quick Install
+## Install
 
-### Pre-built Binaries (Recommended)
-Download the latest standalone executable for your platform from the [Releases](https://github.com/your-repo/gradient-agent/releases) page:
-
-- **Linux (x86_64)**: `gradient-linux-x86_64`
-- **macOS (Intel)**: `gradient-macos-x86_64`  
-- **macOS (Apple Silicon)**: `gradient-macos-arm64`
-- **Windows (x86_64)**: `gradient-windows-x86_64.exe`
-
-Make it executable and run:
 ```bash
-chmod +x gradient-*  # Linux/Mac only
-./gradient-* --help
+pip install gradient-agent
 ```
 
-### From Source
+Verify:
 ```bash
-git clone https://github.com/your-repo/gradient-agent
-cd gradient-agent
-pip install -e .
 gradient --help
+```
+
+## Quick Start
+
+Create `main.py`:
+```python
+from gradient_agent import entrypoint
+
+@entrypoint
+def my_agent(prompt: str) -> str:
+    return f"Echo: {prompt}"
+```
+
+Initialize and run:
+```bash
+gradient agent init --entrypoint-file main.py --agent-name demo --agent-environment dev --no-interactive
+gradient agent run
+```
+
+Send a request:
+```bash
+curl -X POST localhost:8080/completions -H 'Content-Type: application/json' -d '{"prompt":"hello"}'
+```
+
+## Auth (optional)
+```bash
+gradient auth init --token YOUR_TOKEN --no-interactive
+```
+
+## Versioning
+Single package keeps CLI and SDK in sync. `gradient_agent.__version__` shows installed version.
+
+## Migration Notes
+Previous separate `gradient-cli` / `gradient-agent` packages are replaced by this unified distribution (>=0.2.0).

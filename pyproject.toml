@@ -3,22 +3,28 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gradient-cli"
-version = "0.1.0"
-description = "Gradient CLI — auth commands backed by a bundled doctl"
-requires-python = ">=3.9"
-dependencies = ["typer>=0.12.0", "PyYAML>=6.0", "fastapi>=0.104.0", "uvicorn[standard]>=0.24.0", "pydantic>=2.0.0"]
+name = "gradient-agent"
+version = "0.2.0"
+description = "Unified Gradient Agent SDK + CLI"
+requires-python = ">=3.10"
+dependencies = [
+	"fastapi>=0.104.0",
+	"uvicorn[standard]>=0.24.0",
+	"pydantic>=2.5.0",
+	"typing-extensions>=4.8.0",
+	"typer>=0.12.0",
+	"PyYAML>=6.0"
+]
 
 [project.scripts]
-gradient = "gradient.cli:run"
+gradient = "gradient_agent.cli:run"
 
 [tool.setuptools.packages.find]
-include = ["gradient*"]
+include = ["gradient_agent*"]
 
-# IMPORTANT: keys must be valid Python package names (no dashes)
 [tool.setuptools.package-data]
-"gradient._vendor.doctl.darwin_amd64"  = ["doctl"]
-"gradient._vendor.doctl.darwin_arm64"  = ["doctl"]
-"gradient._vendor.doctl.linux_amd64"   = ["doctl"]
-"gradient._vendor.doctl.linux_arm64"   = ["doctl"]
-"gradient._vendor.doctl.windows_amd64" = ["doctl.exe"]
+"gradient_agent._vendor.doctl.darwin_amd64"  = ["doctl"]
+"gradient_agent._vendor.doctl.darwin_arm64"  = ["doctl"]
+"gradient_agent._vendor.doctl.linux_amd64"   = ["doctl"]
+"gradient_agent._vendor.doctl.linux_arm64"   = ["doctl"]
+"gradient_agent._vendor.doctl.windows_amd64" = ["doctl.exe"]

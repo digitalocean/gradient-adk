@@ -15,14 +15,14 @@ The SDK package contains:
 ### Option 1: Development Setup
 
 ```bash
-cd gradient-sdk-package
+cd gradient-agent-package
 ./setup-dev.sh
 ```
 
 ### Option 2: Manual Setup
 
 ```bash
-cd gradient-sdk-package
+cd gradient-agent-package
 python -m venv venv
 source venv/bin/activate
 pip install -e ".[dev]"
