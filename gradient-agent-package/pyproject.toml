@@ -76,4 +76,5 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 
-[project.scripts] gradient = "gradient_agent.cli:run"
+[project.scripts]
+gradient = "gradient_agent.cli:run"
