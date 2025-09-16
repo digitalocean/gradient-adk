@@ -7,7 +7,7 @@ The Gradient Runtime System provides automatic instrumentation and tracking for 
 The runtime system automatically:
 
 1. **Tracks Requests**: Creates a context for each entrypoint call
-2. **Instruments Frameworks**: Automatically monkey-patches framework code to track node executions
+2. **Instruments Frameworks**: Automatically instruments framework code to track node executions
 3. **Provides Observability**: Logs and tracks timing, inputs, outputs, and errors
 4. **Extensible Architecture**: Clean interfaces for adding new framework instrumentors
 
@@ -196,10 +196,3 @@ tracker.end_node_execution(execution, outputs={"result": "success"})
 
 print(f"Tracked {len(tracker.get_executions())} executions")
 ```
-
-## Future Enhancements
-
-- **Metrics Integration**: Prometheus, StatsD, CloudWatch
-- **Distributed Tracing**: OpenTelemetry integration
-- **Performance Profiling**: Memory and CPU usage tracking
-- **Visualization**: Request flow diagrams and performance dashboards
