@@ -45,6 +45,3 @@ Thumbs.db
 
 # Gradient CLI
 .gradient/
-
-# Downloaded doctl binaries (will be downloaded during build)
-gradient/_vendor/doctl/*/doctl*

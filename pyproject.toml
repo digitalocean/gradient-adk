@@ -3,8 +3,8 @@ requires = ["setuptools>=69", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "gradient-agent"
-version = "0.2.0"
+name = "gradient-agents"
+version = "0.0.4"
 description = "Unified Gradient Agent SDK + CLI"
 requires-python = ">=3.10"
 dependencies = [
@@ -17,14 +17,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gradient = "gradient_agent.cli:run"
+gradient = "gradient_agents.cli:run"
 
 [tool.setuptools.packages.find]
-include = ["gradient_agent*"]
-
-[tool.setuptools.package-data]
-"gradient_agent._vendor.doctl.darwin_amd64"  = ["doctl"]
-"gradient_agent._vendor.doctl.darwin_arm64"  = ["doctl"]
-"gradient_agent._vendor.doctl.linux_amd64"   = ["doctl"]
-"gradient_agent._vendor.doctl.linux_arm64"   = ["doctl"]
-"gradient_agent._vendor.doctl.windows_amd64" = ["doctl.exe"]
+include = ["gradient_agents*"]
