@@ -1,3 +1,5 @@
+"""Agent configuration service interface."""
+
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
@@ -14,14 +16,5 @@ class AgentConfigService(ABC):
         entrypoint_file: Optional[str] = None,
         interactive: bool = True,
     ) -> None:
-        """Configure agent settings and save to YAML file."""
-        pass
-
-
-class LaunchService(ABC):
-    """Abstract interface for agent launch operations."""
-
-    @abstractmethod
-    def launch_locally(self) -> None:
-        """Launch the agent locally using Docker."""
+        """Configure agent settings and save to configuration file."""
         pass

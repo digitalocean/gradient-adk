@@ -6,11 +6,15 @@ interface that stores node executions in the current request context.
 """
 
 from datetime import datetime
+import os
 from typing import List, Optional, Dict, Any
 import uuid
 
+from gradient_adk.logging import get_logger
 from .interfaces import ExecutionTracker, NodeExecution
 from .context import get_current_context
+
+logger = get_logger(__name__)
 
 
 class DefaultExecutionTracker(ExecutionTracker):
@@ -58,15 +62,14 @@ class DefaultExecutionTracker(ExecutionTracker):
         # Skip individual node logging - only show final summary
         pass
 
-    def _is_internal_node(self, node_name: str) -> bool:
-        """Check if this is an internal LangGraph node that should be filtered out."""
-        internal_patterns = [
-            "CompiledStateGraph.invoke",
-            "CompiledStateGraph.stream",
-            "Pregel.invoke",
-            "Pregel.stream",
-        ]
-        return any(pattern in node_name for pattern in internal_patterns)
+    def _is_internal_node(self, execution: NodeExecution) -> bool:
+        """Check if this is an internal framework node that should be filtered out.
+
+        Uses metadata to determine if a node is internal, allowing each framework
+        instrumentor to mark their own internal nodes appropriately.
+        """
+        # Check metadata for internal flag (set by instrumentors)
+        return execution.metadata.get("internal", False)
 
     def get_executions(self) -> List[NodeExecution]:
         """Get all tracked executions for the current request."""
@@ -80,55 +83,66 @@ class DefaultExecutionTracker(ExecutionTracker):
         """Print a concise summary with inputs/outputs and only user-defined nodes."""
         context = get_current_context()
         if not context:
-            print("[RUNTIME] No active request context")
+            logger.debug("No active request context")
             return
 
-        # Filter out internal LangGraph nodes for the summary
+        # Filter out internal framework nodes for the summary
         user_executions = [
-            exec
-            for exec in self._executions
-            if not self._is_internal_node(exec.node_name)
+            exec for exec in self._executions if not self._is_internal_node(exec)
         ]
 
-        print(f"\n[RUNTIME] === Request Summary ===")
-        print(f"[RUNTIME] Request ID: {context.request_id}")
-        print(f"[RUNTIME] Entrypoint: {context.entrypoint_name}")
-        print(f"[RUNTIME] Status: {context.status}")
-        print(f"[RUNTIME] Duration: {context.duration_ms or 0:.1f}ms")
+        # Only show verbose summary if GRADIENT_VERBOSE is enabled
+        if not os.getenv("GRADIENT_VERBOSE") == "1":
+            return
+
+        logger.info(
+            "=== Request Summary ===",
+            request_id=context.request_id,
+            entrypoint=context.entrypoint_name,
+            status=context.status,
+            duration_ms=context.duration_ms or 0,
+            node_count=len(user_executions),
+        )
 
         # Show request inputs and outputs
         if context.inputs:
             inputs_str = self._format_data(context.inputs, max_length=100)
-            print(f"[RUNTIME] Request Input: {inputs_str}")
+            logger.debug("Request Input", input=inputs_str)
 
         if context.outputs:
             outputs_str = self._format_data(context.outputs, max_length=100)
-            print(f"[RUNTIME] Request Output: {outputs_str}")
-
-        print(f"[RUNTIME] Node Executions: {len(user_executions)}")
+            logger.debug("Request Output", output=outputs_str)
 
         if user_executions:
-            print(f"[RUNTIME] === Node Details ===")
+            logger.debug("=== Node Details ===")
             for i, execution in enumerate(user_executions, 1):
                 status = execution.status.upper()
                 duration = execution.duration_ms or 0
-                print(
-                    f"[RUNTIME] {i:2}. [{execution.framework}] {execution.node_name} - {status} ({duration:.1f}ms)"
+                logger.debug(
+                    f"{i:2}. [{execution.framework}] {execution.node_name}",
+                    status=status,
+                    duration_ms=duration,
                 )
 
                 # Show node inputs
                 if execution.inputs:
                     inputs_str = self._format_data(execution.inputs, max_length=80)
-                    print(f"[RUNTIME]     Input: {inputs_str}")
+                    logger.debug(
+                        "Node Input", node=execution.node_name, input=inputs_str
+                    )
 
                 # Show node outputs or error
                 if execution.error:
-                    print(f"[RUNTIME]     Error: {execution.error}")
+                    logger.debug(
+                        "Node Error", node=execution.node_name, error=execution.error
+                    )
                 elif execution.outputs:
                     outputs_str = self._format_data(execution.outputs, max_length=80)
-                    print(f"[RUNTIME]     Output: {outputs_str}")
+                    logger.debug(
+                        "Node Output", node=execution.node_name, output=outputs_str
+                    )
 
-        print(f"[RUNTIME] === End Summary ===\n")
+        logger.debug("=== End Summary ===")
 
     def _format_data(self, data: Any, max_length: int = 100) -> str:
         """Format data for display, truncating if too long."""
