@@ -1,5 +1,5 @@
 """
-Structured logging configuration for gradient-agents.
+Structured logging configuration for gradient-adk.
 
 This module provides centralized logging configuration using structlog,
 with support for verbose mode controlled by the GRADIENT_VERBOSE environment variable.
@@ -12,7 +12,7 @@ from typing import Any, Dict
 
 
 def configure_logging(force_verbose: bool = False) -> None:
-    """Configure structured logging for the gradient-agents package.
+    """Configure structured logging for the gradient-adk package.
 
     Args:
         force_verbose: Override environment variable to force verbose mode
@@ -55,6 +55,9 @@ def configure_logging(force_verbose: bool = False) -> None:
         gradient_logger = logging.getLogger("gradient_agents")
         gradient_logger.setLevel(logging.INFO)
 
+        # Suppress httpx INFO logs (like HTTP requests) unless in verbose mode
+        logging.getLogger("httpx").setLevel(logging.WARNING)
+
     # Add console handler if not present
     if not root_logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
@@ -63,7 +66,7 @@ def configure_logging(force_verbose: bool = False) -> None:
 
 
 def _gradient_renderer(logger, method_name: str, event_dict: Dict[str, Any]) -> str:
-    """Custom renderer for gradient-agents log messages."""
+    """Custom renderer for gradient-adk log messages."""
     # Extract components
     level = event_dict.get("level", "").upper()
     logger_name = event_dict.get("logger", "")

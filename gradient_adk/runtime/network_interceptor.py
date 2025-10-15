@@ -163,21 +163,3 @@ def setup_digitalocean_interception() -> None:
     interceptor.add_endpoint_pattern("inference.do-ai.run")
     interceptor.add_endpoint_pattern("inference.do-ai-test.run")
     interceptor.start_intercepting()
-
-
-def is_llm_request_detected(patterns: Optional[Set[str]] = None) -> bool:
-    """
-    Check if any LLM requests were detected.
-
-    Args:
-        patterns: Optional set of patterns to check for. If None, checks for
-                 DigitalOcean inference patterns.
-
-    Returns:
-        True if any of the specified patterns were detected in network requests.
-    """
-    if patterns is None:
-        patterns = {"inference.do-ai.run", "inference-do-ai-test.run"}
-
-    interceptor = get_network_interceptor()
-    return any(interceptor.was_endpoint_called(pattern) for pattern in patterns)

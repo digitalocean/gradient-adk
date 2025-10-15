@@ -8,9 +8,12 @@ from .agent import (
     AgentConfigService,
     LaunchService,
     DeployService,
+    AgentDeployService,
+    TracesService,
     ConfigReader,
     YamlAgentConfigService,
     DirectLaunchService,
+    GalileoTracesService,
     YamlConfigReader,
     get_do_api_token,
     EnvironmentError,
@@ -20,7 +23,7 @@ from .agent import (
 def get_version() -> str:
     """Get the version from package metadata."""
     try:
-        return importlib.metadata.version("gradient-agents")
+        return importlib.metadata.version("gradient-adk")
     except importlib.metadata.PackageNotFoundError:
         return "unknown"
 
@@ -34,7 +37,7 @@ def version_callback(value: bool):
     """Show version and exit."""
     if value:
         version = get_version()
-        typer.echo(f"gradient-agents version {version}")
+        typer.echo(f"gradient-adk version {version}")
         raise typer.Exit()
 
 
@@ -69,10 +72,6 @@ def get_agent_config_service() -> AgentConfigService:
 
 def get_launch_service() -> LaunchService:
     return _launch_service
-
-
-def get_deploy_service() -> DeployService:
-    return _deploy_service
 
 
 def get_config_reader() -> ConfigReader:
@@ -265,15 +264,51 @@ def agent_deploy(
     )
 ):
     """Deploy the agent to DigitalOcean."""
+    import asyncio
+    from pathlib import Path
+    from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+
     try:
-        # Deploy the agent
-        deploy_service = get_deploy_service()
-        deploy_service.deploy_agent()
+        # Get configuration
+        config_reader = get_config_reader()
+        agent_workspace_name = config_reader.get_agent_name()
+        agent_deployment_name = config_reader.get_agent_environment()
+
+        # Get API token
+        if not api_token:
+            api_token = get_do_api_token()
+
+        typer.echo(f"🚀 Deploying {agent_workspace_name}/{agent_deployment_name}...")
+        typer.echo()
+
+        # Get project ID from default project
+        async def deploy():
+            async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
+                # Get default project
+                project_response = await client.get_default_project()
+                project_id = project_response.project.id
+
+                # Create deploy service with injected client
+                deploy_service = AgentDeployService(client=client)
+
+                # Deploy from current directory
+                await deploy_service.deploy_agent(
+                    agent_workspace_name=agent_workspace_name,
+                    agent_deployment_name=agent_deployment_name,
+                    source_dir=Path.cwd(),
+                    project_id=project_id,
+                    api_token=api_token,
+                )
+
+        asyncio.run(deploy())
 
     except EnvironmentError as e:
         typer.echo(f"❌ {e}", err=True)
-        typer.echo("\nTo set your token permanently:", err=True)
+        typer.echo("\nTo set your token:", err=True)
         typer.echo("  export DO_API_TOKEN=your_token_here", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"❌ Deployment failed: {e}", err=True)
         raise typer.Exit(1)
 
 
@@ -328,18 +363,102 @@ def agent_evaluate():
 
 
 @agent_app.command("traces")
-def agent_traces():
+def agent_traces(
+    api_token: Optional[str] = typer.Option(
+        None,
+        "--api-token",
+        help="DigitalOcean API token (overrides DO_API_TOKEN env var)",
+        envvar="DO_API_TOKEN",
+        hide_input=True,
+    )
+):
     """Open the Galileo traces UI for monitoring agent execution."""
-    typer.echo("🔍 Galileo Traces UI")
-    typer.echo("📊 To be implemented")
-    typer.echo()
-    typer.echo("This command will eventually open a URL to view:")
-    typer.echo("  • Agent execution traces")
-    typer.echo("  • Performance metrics")
-    typer.echo("  • Debug information")
-    typer.echo("  • Execution logs")
-    typer.echo()
-    typer.echo("💡 Coming soon: traces.do-ai.run/{agent-id}")
+    import asyncio
+    from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+
+    try:
+        # Get configuration
+        config_reader = get_config_reader()
+        agent_workspace_name = config_reader.get_agent_name()
+        agent_deployment_name = config_reader.get_agent_environment()
+
+        # Get API token
+        if not api_token:
+            api_token = get_do_api_token()
+
+        typer.echo(
+            f"🔍 Opening Galileo Traces UI for {agent_workspace_name}/{agent_deployment_name}..."
+        )
+        typer.echo()
+
+        # Create async function to use context manager
+        async def open_traces():
+            async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
+                traces_service = GalileoTracesService(client=client)
+                await traces_service.open_traces_console(
+                    agent_workspace_name=agent_workspace_name,
+                    agent_deployment_name=agent_deployment_name,
+                )
+
+        asyncio.run(open_traces())
+
+        typer.echo("✅ DigitalOcean Traces UI opened in your browser")
+
+    except EnvironmentError as e:
+        typer.echo(f"❌ {e}", err=True)
+        typer.echo("\nTo set your token permanently:", err=True)
+        typer.echo("  export DO_API_TOKEN=your_token_here", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"❌ Failed to open traces UI: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@agent_app.command("logs")
+def agent_logs(
+    api_token: Optional[str] = typer.Option(
+        None,
+        "--api-token",
+        help="DigitalOcean API token (overrides DO_API_TOKEN env var)",
+        envvar="DO_API_TOKEN",
+        hide_input=True,
+    )
+):
+    """View runtime logs for the deployed agent."""
+    import asyncio
+    from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+
+    try:
+        # Get configuration
+        config_reader = get_config_reader()
+        agent_workspace_name = config_reader.get_agent_name()
+        agent_deployment_name = config_reader.get_agent_environment()
+
+        # Get API token
+        if not api_token:
+            api_token = get_do_api_token()
+
+        # Create async function to use context manager
+        async def fetch_logs():
+            async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
+                traces_service = GalileoTracesService(client=client)
+                logs = await traces_service.get_runtime_logs(
+                    agent_workspace_name=agent_workspace_name,
+                    agent_deployment_name=agent_deployment_name,
+                )
+                return logs
+
+        logs = asyncio.run(fetch_logs())
+        typer.echo(logs)
+
+    except EnvironmentError as e:
+        typer.echo(f"❌ {e}", err=True)
+        typer.echo("\nTo set your token:", err=True)
+        typer.echo("  export DO_API_TOKEN=your_token_here", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"❌ Failed to fetch logs: {e}", err=True)
+        raise typer.Exit(1)
 
 
 def run():

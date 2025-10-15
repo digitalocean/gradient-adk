@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "gradient-adk"
-version = "0.0.1"
+version = "0.0.2"
 description = "Gradient AI Platform Agent Development Kit"
 requires-python = ">=3.10"
 dependencies = [
@@ -19,7 +19,9 @@ dependencies = [
 	"pytest-asyncio>=0.21.0",
 	"structlog>=24.1.0",
 	"pytest-cov>=7.0.0",
-	"httpx>=0.26.0"
+	"httpx>=0.26.0",
+	"requests>=2.32.5",
+	"pytest-mock>=3.15.1"
 ]
 
 [project.scripts]

@@ -12,6 +12,7 @@ venv.bak/
 .pytest_cache
 htmlcov/
 .coverage
+coverage.xml
 
 # Distribution / packaging
 .Python

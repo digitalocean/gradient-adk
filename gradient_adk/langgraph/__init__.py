@@ -1,7 +1,7 @@
 """
-LangGraph integration for gradient-agents.
+LangGraph integration for gradient-adk.
 
-This module provides LangGraph-specific functionality for gradient-agents,
+This module provides LangGraph-specific functionality for gradient-adk,
 including graph instrumentation and monitoring.
 """
 

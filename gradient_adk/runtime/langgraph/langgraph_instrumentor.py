@@ -6,36 +6,12 @@ import inspect
 import uuid
 from typing import Any, Callable, Dict, Optional, Tuple, List
 
-# --- Your framework interfaces ------------------------------------------------
-try:
-    from ..interfaces import FrameworkInstrumentor, ExecutionTracker  # type: ignore
-except Exception as e:
-    raise RuntimeError(
-        "Expected '..interfaces' to export FrameworkInstrumentor and ExecutionTracker"
-    ) from e
+from ..interfaces import FrameworkInstrumentor, ExecutionTracker
 
-# Optional; safe if not used
-try:
-    from ..context import get_current_context  # type: ignore
-except Exception:  # pragma: no cover
-
-    def get_current_context():
-        return None
-
-
-# Keep your existing network interception, unchanged
-try:
-    from ..network_interceptor import (  # type: ignore
-        get_network_interceptor,
-        setup_digitalocean_interception,
-    )
-except Exception:  # pragma: no cover
-
-    def get_network_interceptor():
-        return None
-
-    def setup_digitalocean_interception():
-        return None
+from ..network_interceptor import (
+    get_network_interceptor,
+    setup_digitalocean_interception,
+)
 
 
 class LangGraphInstrumentor(FrameworkInstrumentor):
@@ -119,6 +95,13 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
                             original_func = attr_val
                             break
 
+            if (
+                not original_func
+                and callable(node_spec)
+                and not isinstance(node_spec, type)
+            ):
+                original_func = node_spec
+
             if not original_func:
                 continue
 
@@ -197,8 +180,8 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
     def _execute_with_tracking(
         self, node_name: str, func: Callable, args: Tuple, kwargs: Dict, is_async: bool
     ):
-        """Execute a sync function with execution tracking."""
-        # Set up network interception for this execution
+        import types
+
         interceptor = get_network_interceptor()
         if interceptor:
             try:
@@ -206,7 +189,6 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
             except Exception:
                 pass
 
-        # Start tracking
         node_id = str(uuid.uuid4())
         inputs = self._serialize_inputs(args, kwargs)
 
@@ -223,40 +205,144 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
             except Exception:
                 pass
 
-        # Execute the function
         error = None
         result = None
+        will_stream = False  # <<< NEW
+
         try:
             result = func(*args, **kwargs)
+
+            # Case 1: plain sync generator
+            if isinstance(result, types.GeneratorType):
+                will_stream = True
+
+                def generator_wrapper():
+                    nonlocal error
+                    try:
+                        for item in result:
+                            yield item
+                    except Exception as e:
+                        error = str(e)
+                        raise
+                    finally:
+                        if span and self._tracker:
+                            try:
+                                is_llm = False
+                                if interceptor:
+                                    try:
+                                        endpoints = (
+                                            interceptor.get_detected_endpoints() or []
+                                        )
+                                        endpoint_str = " ".join(endpoints)
+                                        is_llm = any(
+                                            ep in endpoint_str
+                                            for ep in [
+                                                "inference.do-ai.run",
+                                                "inference.do-ai-test.run",
+                                                "api.openai.com",
+                                                "api.anthropic.com",
+                                            ]
+                                        )
+                                    except Exception:
+                                        pass
+                                if hasattr(span, "metadata") and isinstance(
+                                    span.metadata, dict
+                                ):
+                                    span.metadata["is_llm_call"] = is_llm
+                                self._tracker.end_node_execution(
+                                    span,
+                                    outputs=(
+                                        {"streamed": True, "error": error}
+                                        if error
+                                        else {"streamed": True}
+                                    ),
+                                )
+                            except Exception:
+                                pass
+
+                return generator_wrapper()
+
+            # Case 2: dict containing a sync generator under "_stream_generator"
+            import types as _types  # avoid shadowing
+
+            if isinstance(result, dict) and isinstance(
+                result.get("_stream_generator"), _types.GeneratorType
+            ):
+                will_stream = True
+                orig_gen = result["_stream_generator"]
+
+                def dict_generator_wrapper():
+                    nonlocal error
+                    try:
+                        for item in orig_gen:
+                            yield item
+                    except Exception as e:
+                        error = str(e)
+                        raise
+                    finally:
+                        if span and self._tracker:
+                            try:
+                                is_llm = False
+                                if interceptor:
+                                    try:
+                                        endpoints = (
+                                            interceptor.get_detected_endpoints() or []
+                                        )
+                                        endpoint_str = " ".join(endpoints)
+                                        is_llm = any(
+                                            ep in endpoint_str
+                                            for ep in [
+                                                "inference.do-ai.run",
+                                                "inference.do-ai-test.run",
+                                                "api.openai.com",
+                                                "api.anthropic.com",
+                                            ]
+                                        )
+                                    except Exception:
+                                        pass
+                                if hasattr(span, "metadata") and isinstance(
+                                    span.metadata, dict
+                                ):
+                                    span.metadata["is_llm_call"] = is_llm
+                                self._tracker.end_node_execution(
+                                    span,
+                                    outputs=(
+                                        {"streamed": True, "error": error}
+                                        if error
+                                        else {"streamed": True}
+                                    ),
+                                )
+                            except Exception:
+                                pass
+
+                # IMPORTANT: return a new dict with the wrapped generator
+                return {**result, "_stream_generator": dict_generator_wrapper()}
+
         except Exception as e:
             error = str(e)
             raise
         finally:
-            # End tracking
-            if span and self._tracker:
+            # Only end here if we did NOT set up a streaming wrapper
+            if span and self._tracker and not will_stream:
                 try:
-                    # Check for LLM endpoints
                     is_llm = False
                     if interceptor:
                         try:
                             endpoints = interceptor.get_detected_endpoints() or []
                             endpoint_str = " ".join(endpoints)
                             is_llm = any(
-                                endpoint in endpoint_str
-                                for endpoint in [
+                                ep in endpoint_str
+                                for ep in [
                                     "inference.do-ai.run",
-                                    "inference-do-ai-test.run",
+                                    "inference.do-ai-test.run",
                                     "api.openai.com",
                                     "api.anthropic.com",
                                 ]
                             )
                         except Exception:
                             pass
-
-                    # Update span metadata
                     if hasattr(span, "metadata") and isinstance(span.metadata, dict):
                         span.metadata["is_llm_call"] = is_llm
-
                     outputs = (
                         self._serialize_output(result)
                         if error is None
@@ -271,8 +357,8 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
     async def _execute_with_tracking_async(
         self, node_name: str, func: Callable, args: Tuple, kwargs: Dict
     ):
-        """Execute an async function with execution tracking."""
-        # Set up network interception for this execution
+        import types
+
         interceptor = get_network_interceptor()
         if interceptor:
             try:
@@ -280,7 +366,6 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
             except Exception:
                 pass
 
-        # Start tracking
         node_id = str(uuid.uuid4())
         inputs = self._serialize_inputs(args, kwargs)
 
@@ -297,40 +382,141 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
             except Exception:
                 pass
 
-        # Execute the function
         error = None
         result = None
+        will_stream = False  # <<< NEW
+
         try:
             result = await func(*args, **kwargs)
+
+            # Case 1: plain async generator
+            if isinstance(result, types.AsyncGeneratorType):
+                will_stream = True
+
+                async def async_generator_wrapper():
+                    nonlocal error
+                    try:
+                        async for item in result:
+                            yield item
+                    except Exception as e:
+                        error = str(e)
+                        raise
+                    finally:
+                        if span and self._tracker:
+                            try:
+                                is_llm = False
+                                if interceptor:
+                                    try:
+                                        endpoints = (
+                                            interceptor.get_detected_endpoints() or []
+                                        )
+                                        endpoint_str = " ".join(endpoints)
+                                        is_llm = any(
+                                            ep in endpoint_str
+                                            for ep in [
+                                                "inference.do-ai.run",
+                                                "inference.do-ai-test.run",
+                                                "api.openai.com",
+                                                "api.anthropic.com",
+                                            ]
+                                        )
+                                    except Exception:
+                                        pass
+                                if hasattr(span, "metadata") and isinstance(
+                                    span.metadata, dict
+                                ):
+                                    span.metadata["is_llm_call"] = is_llm
+                                self._tracker.end_node_execution(
+                                    span,
+                                    outputs=(
+                                        {"streamed": True, "error": error}
+                                        if error
+                                        else {"streamed": True}
+                                    ),
+                                )
+                            except Exception:
+                                pass
+
+                return async_generator_wrapper()
+
+            # Case 2: dict containing an **async** generator under "_stream_generator"
+            if isinstance(result, dict) and isinstance(
+                result.get("_stream_generator"), types.AsyncGeneratorType
+            ):
+                will_stream = True
+                orig_agen = result["_stream_generator"]
+
+                async def dict_async_generator_wrapper():
+                    nonlocal error
+                    try:
+                        async for item in orig_agen:
+                            yield item
+                    except Exception as e:
+                        error = str(e)
+                        raise
+                    finally:
+                        if span and self._tracker:
+                            try:
+                                is_llm = False
+                                if interceptor:
+                                    try:
+                                        endpoints = (
+                                            interceptor.get_detected_endpoints() or []
+                                        )
+                                        endpoint_str = " ".join(endpoints)
+                                        is_llm = any(
+                                            ep in endpoint_str
+                                            for ep in [
+                                                "inference.do-ai.run",
+                                                "inference.do-ai-test.run",
+                                                "api.openai.com",
+                                                "api.anthropic.com",
+                                            ]
+                                        )
+                                    except Exception:
+                                        pass
+                                if hasattr(span, "metadata") and isinstance(
+                                    span.metadata, dict
+                                ):
+                                    span.metadata["is_llm_call"] = is_llm
+                                self._tracker.end_node_execution(
+                                    span,
+                                    outputs=(
+                                        {"streamed": True, "error": error}
+                                        if error
+                                        else {"streamed": True}
+                                    ),
+                                )
+                            except Exception:
+                                pass
+
+                return {**result, "_stream_generator": dict_async_generator_wrapper()}
+
         except Exception as e:
             error = str(e)
             raise
         finally:
-            # End tracking
-            if span and self._tracker:
+            # Only end here if we did NOT set up a streaming wrapper
+            if span and self._tracker and not will_stream:
                 try:
-                    # Check for LLM endpoints
                     is_llm = False
                     if interceptor:
                         try:
                             endpoints = interceptor.get_detected_endpoints() or []
                             endpoint_str = " ".join(endpoints)
                             is_llm = any(
-                                endpoint in endpoint_str
-                                for endpoint in [
+                                ep in endpoint_str
+                                for ep in [
                                     "inference.do-ai.run",
-                                    "inference-do-ai-test.run",
+                                    "inference.do-ai-test.run",
                                     "api.openai.com",
                                     "api.anthropic.com",
                                 ]
                             )
                         except Exception:
                             pass
-
-                    # Update span metadata
                     if hasattr(span, "metadata") and isinstance(span.metadata, dict):
                         span.metadata["is_llm_call"] = is_llm
-
                     outputs = (
                         self._serialize_output(result)
                         if error is None

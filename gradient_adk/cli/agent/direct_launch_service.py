@@ -192,17 +192,17 @@ class DirectLaunchService(LaunchService):
     def _show_import_help(self) -> None:
         """Show help for import errors."""
         typer.echo(
-            "Please install the gradient-agents package and ensure imports are correct:",
+            "Please install the gradient-adk package and ensure imports are correct:",
             err=True,
         )
-        typer.echo("  pip install gradient-agents", err=True)
-        typer.echo("  from gradient_agents import entrypoint", err=True)
+        typer.echo("  pip install gradient-adk", err=True)
+        typer.echo("  from gradient_adk import entrypoint", err=True)
 
     def _show_entrypoint_example(self) -> None:
         """Show example of correct @entrypoint usage."""
         typer.echo("Please add the @entrypoint decorator to a function in this file:")
         typer.echo("Example:")
-        typer.echo("  from gradient_agents import entrypoint")
+        typer.echo("  from gradient_adk import entrypoint")
         typer.echo("  ")
         typer.echo("  @entrypoint")
         typer.echo("  def main(query, context):")

@@ -175,6 +175,16 @@ class RuntimeManager:
 _runtime_manager: Optional[RuntimeManager] = None
 
 
+def _looks_like_stream(result: Any) -> bool:
+    try:
+        content = getattr(result, "content", None)
+        return bool(content) and (
+            hasattr(content, "__iter__") or hasattr(content, "__aiter__")
+        )
+    except Exception:
+        return False
+
+
 def _try_auto_configure_traces() -> bool:
     """Try to auto-configure DigitalOcean traces from API token and agent config."""
     import os
@@ -183,17 +193,24 @@ def _try_auto_configure_traces() -> bool:
 
     global _runtime_manager
 
+    logger.info("Attempting to auto-configure DigitalOcean traces")
+
     # Only need API token from environment
     api_token = os.getenv("DIGITALOCEAN_API_TOKEN")
     if not api_token:
+        logger.info("No DIGITALOCEAN_API_TOKEN found in environment")
         return False
 
-    # Load agent configuration from .gradient/agent.yml
+    logger.info(
+        "Found DIGITALOCEAN_API_TOKEN in environment"
+    )  # Load agent configuration from .gradient/agent.yml
     try:
         config_file = Path.cwd() / ".gradient" / "agent.yml"
         if not config_file.exists():
+            logger.info(f"Agent config file not found: {config_file}")
             return False
 
+        logger.info(f"Loading agent config from: {config_file}")
         with open(config_file, "r") as f:
             config = yaml.safe_load(f)
 
@@ -201,7 +218,12 @@ def _try_auto_configure_traces() -> bool:
         agent_environment = config.get("agent_environment", "default")
 
         if not agent_name:
+            logger.debug("No agent_name found in config")
             return False
+
+        logger.debug(
+            f"Auto-configuring traces for agent: {agent_name}/{agent_environment}"
+        )
 
         # Create DigitalOcean tracker
         do_client = AsyncDigitalOceanGenAI(api_token=api_token)
@@ -214,6 +236,9 @@ def _try_auto_configure_traces() -> bool:
 
         # Create new runtime manager with the tracker
         _runtime_manager = RuntimeManager(tracker=tracker)
+        logger.info(
+            f"✅ Auto-configured DigitalOcean traces for {agent_name}/{agent_environment}"
+        )
         return True
 
     except Exception as e:
@@ -225,25 +250,14 @@ def get_runtime_manager() -> RuntimeManager:
     """Get the global runtime manager instance."""
     global _runtime_manager
     if _runtime_manager is None:
-        # If no traces were configured, use default
-        if _runtime_manager is None:
+        # Try to auto-configure DigitalOcean traces
+        if not _try_auto_configure_traces():
+            # If auto-configuration failed, use default tracker
             _runtime_manager = RuntimeManager()
         else:
             tracker_type = type(_runtime_manager.get_tracker()).__name__
             logger.debug("Using tracker", tracker_type=tracker_type)
     return _runtime_manager
-
-
-def install_runtime() -> None:
-    """Install runtime instrumentation globally."""
-    manager = get_runtime_manager()
-    manager.install_instrumentation()
-
-
-def uninstall_runtime() -> None:
-    """Uninstall runtime instrumentation globally."""
-    manager = get_runtime_manager()
-    manager.uninstall_instrumentation()
 
 
 def configure_digitalocean_traces(

@@ -70,6 +70,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
 
         self._submitted_traces: Set[str] = set()
         self._inflight_tasks: Set[asyncio.Task] = set()
+        self._submitting_traces: Set[str] = set()  # prevent duplicate scheduling
 
     def _map_node_to_span_type(
         self, node_name: str, framework: str, execution: Optional[NodeExecution] = None
@@ -92,7 +93,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
 
         # Fallback: check inputs, outputs, and metadata for inference endpoint URLs
         # (in case network interception wasn't available or failed)
-        do_inference_patterns = ["inference.do-ai.run", "inference-do-ai-test.run"]
+        do_inference_patterns = ["inference.do-ai.run", "inference.do-ai-test.run"]
         all_data = (
             str(execution.inputs) + str(execution.outputs) + str(execution.metadata)
         )
@@ -446,9 +447,6 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         outputs: Optional[Dict[str, Any]] = None,
         error: Optional[str] = None,
     ) -> None:
-        """
-        End tracking for a node execution and auto-submit when the request completes.
-        """
         logger.debug(
             "DigitalOceanTracker.end_node_execution", node_name=node_execution.node_name
         )
@@ -460,27 +458,52 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
 
         ctx = get_current_context()
         logger.debug("Context status", status=ctx.status if ctx else "None")
-        if ctx and ctx.status in ("completed", "error"):
-            logger.debug("Submitting trace...")
-            task = asyncio.create_task(self._submit_current_trace())
-            # Keep handle to surface exceptions; clean up on completion
-            self._inflight_tasks.add(task)
+        if not ctx:
+            return
 
-            def _log_submission_result(task_result):
-                """Log the result of trace submission."""
-                self._inflight_tasks.discard(task_result)
-                try:
-                    success = task_result.result()
-                    if success:
-                        logger.debug("Trace submitted to DigitalOcean successfully")
-                    else:
-                        logger.error("Failed to submit trace to DigitalOcean")
-                except Exception as e:
-                    logger.error(
-                        "Error during trace submission", error=str(e), exc_info=True
-                    )
+        # NEW: Only allow auto-submit on the synthetic completion node
+        meta = node_execution.metadata or {}
+        is_request_complete = (
+            node_execution.node_name == "RequestComplete"
+            or meta.get("internal_request_complete") is True
+        )
+        if not is_request_complete:
+            return
 
-            task.add_done_callback(_log_submission_result)
+        rid = ctx.request_id
+        # NEW: De-dupe scheduling while a submission is in-flight or already done
+        if rid in self._submitted_traces or rid in self._submitting_traces:
+            return
+
+        self._submitting_traces.add(rid)
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+
+        task = loop.create_task(self._submit_current_trace())
+        self._inflight_tasks.add(task)
+
+        def _log_submission_result(t: asyncio.Task):
+            self._inflight_tasks.discard(t)
+            self._submitting_traces.discard(rid)
+            try:
+                success = t.result()
+                if success:
+                    logger.debug("Trace submitted to DigitalOcean successfully")
+                else:
+                    logger.error("Failed to submit trace to DigitalOcean")
+            except Exception as e:
+                logger.error(
+                    "Error during trace submission", error=str(e), exc_info=True
+                )
+
+        task.add_done_callback(_log_submission_result)
 
     async def submit_trace_manually(self, trace_name: Optional[str] = None) -> bool:
         """
