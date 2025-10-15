@@ -569,7 +569,6 @@ class LangGraphInstrumentor(FrameworkInstrumentor):
             return "<unserializable>"
 
 
-# ---- Singleton management for convenience ------------------------------------
 _singleton: Optional[LangGraphInstrumentor] = None
 
 

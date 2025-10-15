@@ -9,14 +9,15 @@ from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 
 from gradient import Gradient
-from gradient_adk import entrypoint, stream_events
+from gradient_adk import entrypoint, stream_json
 from gradient_adk.langgraph import attach_graph
+from gradient_adk.streaming import stream_events
 
 
 class AgentState(TypedDict, total=False):
     messages: Annotated[List[BaseMessage], add_messages]
-    _stream: bool  # Flag to enable streaming
-    _stream_generator: Any  # Generator for streaming content
+    _stream: bool  # request streaming
+    _delta: str  # scratch: most recent token from node
 
 
 inference = Gradient(model_access_key=os.environ.get("GRADIENT_MODEL_ACCESS_KEY"))
@@ -30,6 +31,12 @@ SYSTEM_PROMPT = (
 )
 
 
+class AgentState(TypedDict, total=False):
+    messages: Annotated[List[BaseMessage], add_messages]
+    _stream: bool  # request streaming
+    _delta: str  # scratch: most recent token from node
+
+
 def call_model(state: AgentState):
     msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in state["messages"]:
@@ -40,52 +47,44 @@ def call_model(state: AgentState):
         else:
             msgs.append(jsonable_encoder(m))
 
-    # Check if streaming is requested via state metadata
     should_stream = state.get("_stream", False)
 
     if should_stream:
-        # Return a generator that will be consumed by the streaming logic
-        def stream_generator():
-            stream = inference.chat.completions.create(
-                model=MODEL_ID,
-                messages=msgs,
-                stream=True,
+        # optional: announce an empty assistant message so downstream renderers have something to append to
+        yield {"messages": [AIMessage(content="")]}  # instrumentor sees this
+
+        stream = inference.chat.completions.create(
+            model=MODEL_ID,
+            messages=msgs,
+            stream=True,
+        )
+
+        collected: List[str] = []
+        for chunk in stream:
+            choices = getattr(chunk, "choices", None) or getattr(chunk, "data", {}).get(
+                "choices", []
             )
+            if not choices:
+                continue
 
-            collected_content = ""
-            for chunk in stream:
-                choices = getattr(chunk, "choices", None) or getattr(
-                    chunk, "data", {}
-                ).get("choices", [])
-                if not choices:
-                    continue
+            delta = getattr(choices[0], "delta", None)
+            content = None
+            if delta is not None and hasattr(delta, "content"):
+                content = delta.content
+            elif isinstance(delta, dict):
+                content = delta.get("content")
 
-                choice0 = choices[0]
-                delta = getattr(choice0, "delta", None)
-                if delta is None:
-                    continue
+            if content:
+                collected.append(content)
+                # Emit a token delta as a node *output*.
+                # Your instrumentor will capture this.
+                yield {"_delta": content}
 
-                if hasattr(delta, "content"):
-                    content = delta.content
-                elif isinstance(delta, dict):
-                    content = delta.get("content")
-                else:
-                    content = None
-
-                if content:
-                    collected_content += content
-                    yield content
-
-            # Store final content in state for trace recording
-            return collected_content
-
-        # Store the generator in the state for streaming consumption
-        return {
-            "messages": [AIMessage(content="")],
-            "_stream_generator": stream_generator(),
-        }
+        final_text = "".join(collected)
+        # Finalize the assistant message for tracing.
+        yield {"messages": [AIMessage(content=final_text)], "_delta": ""}  # clear delta
+        return  # end node
     else:
-        # Non-streaming path
         resp = inference.chat.completions.create(model=MODEL_ID, messages=msgs)
         text = resp.choices[0].message.content or ""
         return {"messages": [AIMessage(content=text)]}
@@ -104,30 +103,17 @@ def _stream_chat(query: str):
     yield {"type": "start", "model": MODEL_ID}
 
     try:
-        # Use the instrumented LangGraph workflow with streaming enabled
-        result = workflow.invoke(
-            {"messages": [HumanMessage(content=query)], "_stream": True}
-        )
+        # Stream updates emitted *by the node*.
+        for update in workflow.stream(
+            {"messages": [HumanMessage(content=query)], "_stream": True},
+            stream_mode="updates",  # only the per-step diffs
+        ):
+            # Forward per-token deltas
+            delta = update.get("_delta")
+            if delta:
+                yield {"type": "token", "text": delta}
 
-        # Check if we have a stream generator from the call_model node
-        stream_generator = result.get("_stream_generator")
-        collected_content = ""
-
-        if stream_generator:
-            # Stream the tokens
-            for content in stream_generator:
-                if content:
-                    collected_content += content
-                    yield {"type": "token", "text": content}
-
-            # Update the AI message with the complete content for trace recording
-            if result.get("messages"):
-                for msg in reversed(result["messages"]):
-                    if isinstance(msg, AIMessage):
-                        msg.content = collected_content
-                        break
-
-        # End event
+        # Done
         yield {"type": "end"}
     except Exception as e:
         yield {"type": "error", "message": str(e)}
@@ -136,21 +122,53 @@ def _stream_chat(query: str):
 
 @entrypoint
 def entry(data, context):
-    """
-    Expected payload:
-      { "query": "How do I deploy a FastAPI app on App Platform?" }
-
-    Returns:
-      Server-Sent Events stream (NDJSON-ish via your stream_events wrapper)
-    """
     query = (data or {}).get("query", "").strip()
-    if not query:
-        # Fall back to non-stream JSON if no question provided
-        out = workflow.invoke({"messages": [HumanMessage(content="")]})
-        last_ai = next(
-            (m for m in reversed(out["messages"]) if isinstance(m, AIMessage)), None
-        )
-        return {"answer": last_ai.content if last_ai else ""}
+    wants_stream = bool((data or {}).get("stream", True))
 
-    # Stream tokens back to the client
-    return stream_events(_stream_chat(query))
+    # default empty prompt path
+    if not query:
+        # Run the graph to completion via streaming and just collect (no SSE)
+        buf = []
+        last_ai = None
+        for update in workflow.stream(
+            {
+                "messages": [HumanMessage(content="")],
+                "_stream": True,
+            },  # force node streaming
+            stream_mode="updates",
+        ):
+            if update.get("_delta"):
+                buf.append(update["_delta"])
+            msgs = update.get("messages")
+            if msgs:
+                for m in reversed(msgs):
+                    if isinstance(m, AIMessage):
+                        last_ai = m
+                        break
+        text = "".join(buf) if buf else (last_ai.content if last_ai else "")
+        return {"answer": text}
+
+    if wants_stream:
+        # SSE path (client wants streaming)
+        return stream_events(_stream_chat(query))
+    else:
+        # Non-SSE path (client wants final only) — still drive the generator node to completion
+        buf = []
+        last_ai = None
+        for update in workflow.stream(
+            {
+                "messages": [HumanMessage(content=query)],
+                "_stream": True,
+            },  # force node streaming
+            stream_mode="updates",
+        ):
+            if update.get("_delta"):
+                buf.append(update["_delta"])
+            msgs = update.get("messages")
+            if msgs:
+                for m in reversed(msgs):
+                    if isinstance(m, AIMessage):
+                        last_ai = m
+                        break
+        text = "".join(buf) if buf else (last_ai.content if last_ai else "")
+        return {"answer": text}
