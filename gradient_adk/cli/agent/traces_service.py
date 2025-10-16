@@ -177,8 +177,6 @@ class GalileoTracesService:
             agent_deployment_name=agent_deployment_name,
         )
 
-        print(logs_output)
-
         # Fetch the logs from the live URL
         async with httpx.AsyncClient() as http_client:
             response = await http_client.get(logs_output.live_url)

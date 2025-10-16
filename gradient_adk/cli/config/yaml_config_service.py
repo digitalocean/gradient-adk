@@ -29,7 +29,7 @@ class YamlAgentConfigService(AgentConfigService):
                 agent_name = typer.prompt("Agent name")
             if agent_environment is None:
                 agent_environment = typer.prompt(
-                    "Agent environment name", default="main"
+                    "Agent deployment name", default="main"
                 )
             if entrypoint_file is None:
                 entrypoint_file = typer.prompt(
@@ -88,7 +88,7 @@ class YamlAgentConfigService(AgentConfigService):
         """Show example of correct @entrypoint usage."""
         typer.echo("Please add the @entrypoint decorator to a function in this file.")
         typer.echo("Example:")
-        typer.echo("         from gradient_agents import entrypoint")
+        typer.echo("         from gradient_adk import entrypoint")
         typer.echo("         @entrypoint")
         typer.echo("         def my_agent(data, context):")
         typer.echo("             return {'result': data}")

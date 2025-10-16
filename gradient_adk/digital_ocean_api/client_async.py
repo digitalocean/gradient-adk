@@ -272,7 +272,7 @@ class AsyncDigitalOceanGenAI:
             agent_workspace_name=agent_workspace_name,
             agent_deployment_name=agent_deployment_name,
         )
-        path = f"/gen-ai/agent-workspaces/{agent_workspace_name}/agent-deployments/{agent_deployment_name}/logs"
+        path = f"/gen-ai/agent-workspaces/{agent_workspace_name}/agent-deployments/{agent_deployment_name}/logs?tail_lines=50"
         data = await self._get_json(path)
         return GetAgentWorkspaceDeploymentRuntimeLogsOutput(**data)
 

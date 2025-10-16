@@ -92,7 +92,7 @@ def _configure_agent(
         if agent_name is None:
             agent_name = typer.prompt("Agent name")
         if deployment_name is None:
-            deployment_name = typer.prompt("Agent environment name", default="main")
+            deployment_name = typer.prompt("Agent deployment name", default="main")
         # entrypoint_file is already set and we don't prompt for it
 
         # Now call configure in non-interactive mode since we have all values
@@ -150,6 +150,24 @@ __pycache__/
 """
         gitignore_path.write_text(gitignore_content)
         typer.echo("   Created file: .gitignore")
+
+    # Create requirements.txt if it doesn't exist
+    requirements_path = pathlib.Path("requirements.txt")
+    if not requirements_path.exists():
+        requirements_content = """gradient-adk
+langgraph
+langchain-core
+gradient
+"""
+        requirements_path.write_text(requirements_content)
+        typer.echo("   Created file: requirements.txt")
+
+    # Create a .env file with placeholder variables if it doesn't exist
+    env_path = pathlib.Path(".env")
+    if not env_path.exists():
+        env_content = ""
+        env_path.write_text(env_content)
+        typer.echo("   Created file: .env")
 
     typer.echo("\n✅ Project structure created successfully!")
 
@@ -309,56 +327,6 @@ def agent_deploy(
         raise typer.Exit(1)
     except Exception as e:
         typer.echo(f"❌ Deployment failed: {e}", err=True)
-        raise typer.Exit(1)
-
-
-@agent_app.command("evaluate")
-def agent_evaluate():
-    """Run an evaluation of the agent."""
-    import time
-
-    try:
-        config_reader = get_config_reader()
-        agent_name = config_reader.get_agent_name()
-        agent_environment = config_reader.get_agent_environment()
-
-        typer.echo(f"🧪 Initiating evaluation for agent: {agent_name}")
-        typer.echo(f"🎯 Environment: {agent_environment}")
-        typer.echo()
-
-        # Setting up evaluation
-        typer.echo("⚙️  Setting up evaluation...")
-        time.sleep(2)
-
-        # Starting run
-        typer.echo("🚀 Starting run...")
-        time.sleep(1)
-
-        # Poll for 10 seconds with progress indicators
-        typer.echo("📊 Running evaluation...")
-        for i in range(10):
-            time.sleep(1)
-            dots = "." * ((i % 3) + 1)
-            typer.echo(f"   Evaluating{dots}", nl=False)
-            if i < 9:  # Don't print newline on last iteration
-                typer.echo("\r", nl=False)
-
-        typer.echo()  # Final newline
-        time.sleep(0.5)
-
-        # Complete
-        typer.echo("✅ Evaluation completed!")
-        typer.echo()
-        typer.echo("📈 View detailed results at:")
-        # Get URL from env var EVALUATION_URL
-        eval_url = os.getenv(
-            "EVALUATION_URL",
-            "https://cloud.digitalocean.com/gen-ai/workspaces/11f076b0-2ff2-d71d-b074-4e013e2ddde4/evaluations/384ad568-76b5-11f0-b074-4e013e2ddde4/runs/73b04ba3-6494-42af-b7de-b093d8082814?i=b59231",
-        )
-        typer.echo(eval_url)
-
-    except Exception as e:
-        typer.echo(f"❌ Evaluation failed: {e}", err=True)
         raise typer.Exit(1)
 
 

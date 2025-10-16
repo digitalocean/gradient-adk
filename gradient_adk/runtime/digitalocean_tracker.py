@@ -399,7 +399,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             logger.debug(f"Successfully submitted trace '{trace.name}' to DigitalOcean")
             return True
         except DOAPIError as e:
-            logger.error(
+            logger.debug(
                 f"API error submitting trace '{trace.name}'",
                 error=str(e),
                 status_code=getattr(e, "status_code", None),
@@ -407,7 +407,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             )
             return False
         except Exception as e:
-            logger.error(
+            logger.debug(
                 f"Unexpected error submitting trace '{trace.name}'",
                 error=str(e),
                 exc_info=True,
@@ -497,9 +497,9 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
                 if success:
                     logger.debug("Trace submitted to DigitalOcean successfully")
                 else:
-                    logger.error("Failed to submit trace to DigitalOcean")
+                    logger.debug("Failed to submit trace to DigitalOcean")
             except Exception as e:
-                logger.error(
+                logger.debug(
                     "Error during trace submission", error=str(e), exc_info=True
                 )
 
@@ -526,7 +526,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         super().print_summary()
         ctx = get_current_context()
         if ctx and ctx.request_id in self._submitted_traces:
-            logger.info("✓ Trace submitted to DigitalOcean")
+            logger.debug("Trace submitted to DigitalOcean")
         elif not self.enable_auto_submit:
             logger.warning("⚠ Auto-submit disabled - call submit_trace_manually()")
         # Note: For auto-submit enabled cases without successful submission,

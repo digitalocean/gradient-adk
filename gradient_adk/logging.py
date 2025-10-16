@@ -46,13 +46,13 @@ def configure_logging(force_verbose: bool = False) -> None:
 
     if verbose_mode:
         root_logger.setLevel(logging.DEBUG)
-        # Set gradient_agents logger to DEBUG
-        gradient_logger = logging.getLogger("gradient_agents")
+        # Set gradient_adk logger to DEBUG
+        gradient_logger = logging.getLogger("gradient_adk")
         gradient_logger.setLevel(logging.DEBUG)
     else:
         root_logger.setLevel(logging.INFO)
-        # Set gradient_agents logger to INFO
-        gradient_logger = logging.getLogger("gradient_agents")
+        # Set gradient_adk logger to INFO
+        gradient_logger = logging.getLogger("gradient_adk")
         gradient_logger.setLevel(logging.INFO)
 
         # Suppress httpx INFO logs (like HTTP requests) unless in verbose mode
@@ -128,7 +128,7 @@ def get_logger(name: str = None) -> structlog.BoundLogger:
         import inspect
 
         frame = inspect.currentframe().f_back
-        name = frame.f_globals.get("__name__", "gradient_agents")
+        name = frame.f_globals.get("__name__", "gradient_adk")
 
     return structlog.get_logger(name)
 

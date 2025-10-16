@@ -95,7 +95,7 @@ class DefaultExecutionTracker(ExecutionTracker):
         if not os.getenv("GRADIENT_VERBOSE") == "1":
             return
 
-        logger.info(
+        logger.debug(
             "=== Request Summary ===",
             request_id=context.request_id,
             entrypoint=context.entrypoint_name,

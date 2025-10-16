@@ -12,6 +12,7 @@ from gradient_adk.digital_ocean_api.models import (
     CreateAgentWorkspaceInput,
     CreateAgentWorkspaceDeploymentInput,
     CreateAgentDeploymentReleaseInput,
+    GetAgentWorkspaceDeploymentOutput,
     PresignedUrlFile,
     ReleaseStatus,
 )
@@ -309,11 +310,18 @@ class AgentDeployService:
             )
             workspace_output = await self.client.create_agent_workspace(workspace_input)
 
-            # Get the first deployment's release UUID
-            if workspace_output.agent_workspace.deployments:
-                first_deployment = workspace_output.agent_workspace.deployments[0]
-                if first_deployment.latest_release:
-                    return first_deployment.latest_release.uuid
+            # deployment output doesn't have the latest release uuid so we need to grab it from the deployment
+            new_deployment_get_output: GetAgentWorkspaceDeploymentOutput = (
+                await self.client.get_agent_workspace_deployment(
+                    agent_workspace_name=agent_workspace_name,
+                    agent_deployment_name=agent_deployment_name,
+                )
+            )
+
+            if new_deployment_get_output.agent_workspace_deployment.latest_release:
+                return (
+                    new_deployment_get_output.agent_workspace_deployment.latest_release.uuid
+                )
 
             raise Exception("Created workspace but no release UUID found")
 

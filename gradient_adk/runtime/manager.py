@@ -193,24 +193,24 @@ def _try_auto_configure_traces() -> bool:
 
     global _runtime_manager
 
-    logger.info("Attempting to auto-configure DigitalOcean traces")
+    logger.debug("Attempting to auto-configure DigitalOcean traces")
 
     # Only need API token from environment
     api_token = os.getenv("DIGITALOCEAN_API_TOKEN")
     if not api_token:
-        logger.info("No DIGITALOCEAN_API_TOKEN found in environment")
+        logger.debug("No DIGITALOCEAN_API_TOKEN found in environment")
         return False
 
-    logger.info(
+    logger.debug(
         "Found DIGITALOCEAN_API_TOKEN in environment"
     )  # Load agent configuration from .gradient/agent.yml
     try:
         config_file = Path.cwd() / ".gradient" / "agent.yml"
         if not config_file.exists():
-            logger.info(f"Agent config file not found: {config_file}")
+            logger.debug(f"Agent config file not found: {config_file}")
             return False
 
-        logger.info(f"Loading agent config from: {config_file}")
+        logger.debug(f"Loading agent config from: {config_file}")
         with open(config_file, "r") as f:
             config = yaml.safe_load(f)
 
@@ -236,8 +236,8 @@ def _try_auto_configure_traces() -> bool:
 
         # Create new runtime manager with the tracker
         _runtime_manager = RuntimeManager(tracker=tracker)
-        logger.info(
-            f"✅ Auto-configured DigitalOcean traces for {agent_name}/{agent_environment}"
+        logger.debug(
+            f"DigitalOcean traces auto-configured for {agent_name}/{agent_environment}"
         )
         return True
 
@@ -315,7 +315,7 @@ def configure_digitalocean_traces(
 def attach_graph(graph_like: Any) -> None:
     """
     Convenience wrapper so agents can do:
-        from gradient_agents.runtime.manager import attach_graph
+        from gradient_adk.runtime.manager import attach_graph
         attach_graph(graph)
         workflow = graph.compile()
     """

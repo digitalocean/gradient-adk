@@ -42,8 +42,8 @@ def configure_traces_from_env(
         )
 
         tracker = manager.get_tracker()
-        logger.info(
-            "✓ DigitalOcean traces configured successfully",
+        logger.debug(
+            "DigitalOcean traces configured successfully",
             workspace=tracker.agent_workspace_name,
             deployment=tracker.agent_deployment_name,
             auto_submit="enabled" if auto_submit else "disabled",
@@ -87,8 +87,8 @@ def configure_traces_with_token(
         )
 
         tracker = manager.get_tracker()
-        logger.info(
-            "✓ DigitalOcean traces configured successfully",
+        logger.debug(
+            "DigitalOcean traces configured successfully",
             workspace=tracker.agent_workspace_name,
             deployment=tracker.agent_deployment_name,
             auto_submit="enabled" if auto_submit else "disabled",

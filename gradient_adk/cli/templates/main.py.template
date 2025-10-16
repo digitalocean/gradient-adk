@@ -6,8 +6,8 @@ import os
 from typing import Dict, TypedDict
 
 from gradient import Gradient
-from gradient_agents import entrypoint
-from gradient_agents.langgraph import attach_graph
+from gradient_adk import entrypoint
+from gradient_adk.langgraph import attach_graph
 from langgraph.graph import StateGraph
 
 
