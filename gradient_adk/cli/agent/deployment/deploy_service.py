@@ -13,6 +13,7 @@ from gradient_adk.digital_ocean_api.models import (
     CreateAgentWorkspaceDeploymentInput,
     CreateAgentDeploymentReleaseInput,
     GetAgentWorkspaceDeploymentOutput,
+    GetAgentWorkspaceOutput,
     PresignedUrlFile,
     ReleaseStatus,
 )
@@ -133,11 +134,35 @@ class AgentDeployService:
                 deployment=agent_deployment_name,
             )
 
+            # Get Agent workspace info
+            agent_workspace: GetAgentWorkspaceOutput = (
+                await self.client.get_agent_workspace(agent_workspace_name)
+            )
+
+            # Prepare invocation instructions
+            workspace_uuid = agent_workspace.agent_workspace.uuid
+
+            invoke_url = "https://agents.do-ai.run"
+            header_value = f"{workspace_uuid}/{agent_deployment_name}"
+
+            logger.info(
+                "To invoke your deployed agent, send a POST request to %s",
+                invoke_url,
+            )
+            logger.info(
+                "API requests must include the header: DO-Agent: %s",
+                header_value,
+            )
+            logger.info(
+                'Example:\n  curl -X POST %s -H "Content-Type: application/json" -H "DO-Agent: %s" -d \'{"input": "hello"}\'',
+                invoke_url,
+                header_value,
+            )
+
         finally:
             # Cleanup zip file
             if zip_path.exists():
                 zip_path.unlink()
-                logger.debug(f"Cleaned up zip file: {zip_path}")
 
     async def _check_existing_resources(
         self, agent_workspace_name: str, agent_deployment_name: str
@@ -245,8 +270,6 @@ class AgentDeployService:
         Returns:
             AgentDeploymentCodeArtifact with upload details
         """
-        logger.info("Requesting presigned URL for upload...")
-
         file_size = zip_path.stat().st_size
 
         # Get presigned URL
@@ -262,8 +285,6 @@ class AgentDeployService:
                 presigned_input
             )
         )
-
-        logger.info("Uploading code artifact...")
 
         # Upload to S3
         await self.s3_uploader.upload_file(
@@ -439,20 +460,14 @@ class AgentDeployService:
                     print(
                         f"✅ Deployment completed successfully! [{format_elapsed(elapsed)}]"
                     )
-                    if release.url:
-                        print(f"🔗 Access URL: {release.url}")
-                    print()
                     return
 
                 if current_status == ReleaseStatus.RELEASE_STATUS_FAILED:
                     print("\r" + " " * 80 + "\r", end="")  # Clear line
                     error_msg = release.error_msg or "Unknown error"
-                    raise Exception(f"Deployment failed: {error_msg}")
-
-                if current_status == ReleaseStatus.RELEASE_STATUS_UNDEPLOYMENT_FAILED:
-                    print("\r" + " " * 80 + "\r", end="")  # Clear line
-                    error_msg = release.error_msg or "Unknown error"
-                    raise Exception(f"Undeployment failed: {error_msg}")
+                    raise Exception(
+                        f"Deployment failed due to release status being failed: {error_msg}"
+                    )
 
             # Update spinner and display (every iteration for smooth animation)
             if current_status:

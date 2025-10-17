@@ -251,6 +251,16 @@ class ListAgentWorkspacesOutput(BaseModel):
     )
 
 
+class GetAgentWorkspaceOutput(BaseModel):
+    """
+    Response for getting a single agent workspace.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    agent_workspace: AgentWorkspace = Field(..., description="The agent workspace")
+
+
 class PresignedUrlFile(BaseModel):
     """
     A single file's metadata in the request.

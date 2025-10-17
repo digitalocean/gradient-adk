@@ -8,9 +8,17 @@ to DigitalOcean's GenAI Traces API without blocking the event loop.
 from __future__ import annotations
 
 import asyncio
-import os
-from datetime import datetime, timezone
-from typing import List, Optional, Dict, Any, Set
+import base64
+import concurrent.futures
+import dataclasses
+import threading
+from dataclasses import asdict
+from collections.abc import Mapping, Sequence, Generator
+from datetime import datetime, date, timezone
+from pathlib import Path
+from typing import List, Optional, Dict, Any, Set, Union
+from uuid import UUID
+from enum import Enum
 
 from gradient_adk.digital_ocean_api import (
     AsyncDigitalOceanGenAI,
@@ -28,15 +36,6 @@ from .tracker import DefaultExecutionTracker
 
 logger = get_logger(__name__)
 
-import base64
-import dataclasses
-from dataclasses import asdict
-from collections.abc import Mapping, Sequence, Generator
-from datetime import datetime, date
-from pathlib import Path
-from uuid import UUID
-from enum import Enum
-
 
 def _utc(dt: datetime) -> datetime:
     """Ensure datetime is timezone-aware in UTC."""
@@ -49,8 +48,11 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
     """
     ExecutionTracker that submits traces to DigitalOcean using an async, typed client.
 
-    Constructor supports either passing a ready AsyncDigitalOceanGenAI client or an api_token.
-    Prefers agent_workspace_name per the latest schema; optional session_id is supported.
+    Improvements:
+      - Safe scheduling across threads/loops (no dead loops).
+      - Heavy serialization offloaded with asyncio.to_thread.
+      - Robust shutdown: waits for both Tasks and cross-loop Futures.
+      - Defensive logging to avoid event-loop stalls from huge payloads.
     """
 
     def __init__(
@@ -60,6 +62,9 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         agent_deployment_name: str,
         client: AsyncDigitalOceanGenAI,
         enable_auto_submit: bool = True,
+        json_safe_max_depth: int = 6,
+        max_logged_chars: int = 2_000,
+        loop: Optional[asyncio.AbstractEventLoop] = None,
     ) -> None:
         super().__init__()
 
@@ -68,75 +73,150 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         self.agent_deployment_name = agent_deployment_name
         self.enable_auto_submit = enable_auto_submit
 
+        self._json_safe_max_depth = json_safe_max_depth
+        self._max_logged_chars = max_logged_chars
+
         self._submitted_traces: Set[str] = set()
-        self._inflight_tasks: Set[asyncio.Task] = set()
         self._submitting_traces: Set[str] = set()  # prevent duplicate scheduling
+
+        self._loop: Optional[asyncio.AbstractEventLoop] = loop
+        self._scheduler_lock = threading.Lock()
+        self._inflight_tasks: Set[asyncio.Task] = set()
+        self._inflight_futures: Set[concurrent.futures.Future] = set()
+
+    def bind_event_loop(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+        """
+        Bind a running event loop to this tracker.
+        Call once from async context during initialization (recommended).
+        """
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        self._loop = loop
+
+    def _schedule_submit(self, rid: str) -> None:
+        """
+        Schedule _submit_current_trace safely:
+          - If called from the bound loop thread: create_task.
+          - If called from another thread: run_coroutine_threadsafe.
+          - As a last resort: run in a one-off background thread using asyncio.run.
+        """
+        coro = self._submit_current_trace()
+
+        # Try "current running loop" path first (we're likely on the main loop).
+        try:
+            running = asyncio.get_running_loop()
+            task = running.create_task(coro)
+            self._inflight_tasks.add(task)
+
+            def _on_task_done(t: asyncio.Task) -> None:
+                self._inflight_tasks.discard(t)
+                self._submitting_traces.discard(rid)
+                try:
+                    success = t.result()
+                    if success:
+                        logger.debug("Trace submitted to DigitalOcean successfully")
+                    else:
+                        logger.warning("Failed to submit trace to DigitalOcean")
+                except Exception as e:
+                    logger.debug(
+                        "Error during trace submission", error=str(e), exc_info=True
+                    )
+
+            task.add_done_callback(_on_task_done)
+            return
+        except RuntimeError:
+            # Not in any running loop (probably a worker thread).
+            pass
+
+        # Cross-thread path using a bound loop.
+        if self._loop and self._loop.is_running():
+            fut = asyncio.run_coroutine_threadsafe(coro, self._loop)
+            self._inflight_futures.add(fut)
+
+            def _on_future_done(f: concurrent.futures.Future) -> None:
+                self._inflight_futures.discard(f)
+                self._submitting_traces.discard(rid)
+                try:
+                    success = f.result()
+                    if success:
+                        logger.debug("Trace submitted to DigitalOcean successfully")
+                    else:
+                        logger.warning("Failed to submit trace to DigitalOcean")
+                except Exception as e:
+                    logger.debug(
+                        "Error during trace submission", error=str(e), exc_info=True
+                    )
+
+            fut.add_done_callback(_on_future_done)
+            return
+
+        # Last resort: one-off thread that runs the coroutine to completion.
+        def _runner() -> None:
+            try:
+                success = asyncio.run(coro)
+                if success:
+                    logger.debug("Trace submitted to DigitalOcean successfully")
+                else:
+                    logger.warning("Failed to submit trace to DigitalOcean")
+            except Exception as e:
+                logger.warning(
+                    "Error during trace submission",
+                    error=str(e),
+                    exc_info=True,
+                )
+            finally:
+                self._submitting_traces.discard(rid)
+
+        threading.Thread(target=_runner, daemon=True).start()
 
     def _map_node_to_span_type(
         self, node_name: str, framework: str, execution: Optional[NodeExecution] = None
     ) -> TraceSpanType:
         """Determine the appropriate span type based on node characteristics."""
-
-        # Check if this node made calls to DigitalOcean inference endpoints
         if execution and self._is_llm_node(execution):
-            logger.debug("Detected LLM call in node", node_name=node_name)
+            if logger.isEnabledFor(10):
+                logger.debug("Detected LLM call in node", node_name=node_name)
             return TraceSpanType.TRACE_SPAN_TYPE_LLM
-
-        return TraceSpanType.TRACE_SPAN_TYPE_TOOL  # Default to TOOL
+        return TraceSpanType.TRACE_SPAN_TYPE_TOOL
 
     def _is_llm_node(self, execution: NodeExecution) -> bool:
         """Check if a node execution involves calls to DigitalOcean inference endpoints."""
-
-        # First check if the instrumentor detected LLM calls via network interception
         if execution.metadata and execution.metadata.get("is_llm_call", False):
             return True
-
-        # Fallback: check inputs, outputs, and metadata for inference endpoint URLs
-        # (in case network interception wasn't available or failed)
         do_inference_patterns = ["inference.do-ai.run", "inference.do-ai-test.run"]
-        all_data = (
-            str(execution.inputs) + str(execution.outputs) + str(execution.metadata)
-        )
-        return any(pattern in all_data for pattern in do_inference_patterns)
+        all_data = f"{execution.inputs}{execution.outputs}{execution.metadata}"
+        return any(p in all_data for p in do_inference_patterns)
 
     def _span_from_execution(self, execution: NodeExecution) -> Span:
         """
         Convert NodeExecution → Span (protobuf-compatible model).
-        - `created_at` uses node start time (fallback: now UTC).
-        - `error` is embedded into output["error"] (schema has no explicit error field).
-        - Inputs/outputs are converted to JSON-safe shapes.
+        Uses JSON-safe conversion; errors embedded into output.
         """
         span_type = self._map_node_to_span_type(
             execution.node_name, execution.framework, execution
         )
 
-        # ------- OUTPUTS -------
         raw_outputs = execution.outputs if execution.outputs is not None else {}
         output = self._unwrap_result_maybe(raw_outputs)
 
-        # If output isn't a mapping, try to coerce; otherwise leave as-is
         out_map = self._to_mapping_or_none(output)
         if out_map is not None:
             output = out_map
 
-        # Merge error safely regardless of output's original shape
         output = self._merge_error_into_output(output, execution.error)
         output = self._json_safe(output)
 
-        # ------- INPUTS --------
         raw_inputs = execution.inputs if execution.inputs is not None else {}
-
-        # Prefer the single positional arg if present (typical tool/LLM wrappers)
         first_arg = self._first_arg_or_none(raw_inputs)
         if first_arg is not None:
             input_payload = first_arg
-            logger.debug("Using first arg as input", node_name=execution.node_name)
+            if logger.isEnabledFor(10):
+                logger.debug("Using first arg as input", node_name=execution.node_name)
         else:
             in_map = self._to_mapping_or_none(raw_inputs)
             if in_map is not None:
                 input_payload = in_map
             else:
-                # If it's a sequence but not KV pairs, treat as args
                 if isinstance(raw_inputs, Sequence) and not isinstance(
                     raw_inputs, (str, bytes, bytearray)
                 ):
@@ -145,17 +225,10 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
                     else:
                         input_payload = {"args": list(raw_inputs)}
                 else:
-                    # Anything else: wrap as scalar input
                     input_payload = {"input": raw_inputs}
 
-        # Ensure mapping and attach node metadata
         input_payload = self._ensure_mapping(self._json_safe(input_payload))
-        input_payload["_node_meta"] = {
-            "framework": execution.framework,
-            "node_id": getattr(execution, "node_id", None),
-        }
 
-        # ------- CREATED_AT ----
         start = getattr(execution, "start_time", None)
         created_at = _utc(start) if start else _utc(datetime.utcnow())
 
@@ -168,9 +241,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         )
 
     def _is_kv_pairs(self, seq) -> bool:
-        if isinstance(seq, (str, bytes, bytearray)):
-            return False
-        if not isinstance(seq, Sequence):
+        if isinstance(seq, (str, bytes, bytearray)) or not isinstance(seq, Sequence):
             return False
         for item in seq:
             if (
@@ -183,23 +254,17 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
 
     def _to_mapping_or_none(self, obj):
         """Return a dict-like mapping for obj if possible, else None."""
-        # True mappings
         if isinstance(obj, Mapping):
             return dict(obj)
-
-        # Dataclasses
         if dataclasses.is_dataclass(obj):
             return asdict(obj)
 
-        # Pydantic v2
         md = getattr(obj, "model_dump", None)
         if callable(md):
             try:
                 return obj.model_dump()
             except Exception:
                 pass
-
-        # Pydantic v1 / typical .dict()
         dd = getattr(obj, "dict", None)
         if callable(dd):
             try:
@@ -207,11 +272,9 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             except Exception:
                 pass
 
-        # Generic __dict__
         if hasattr(obj, "__dict__") and isinstance(getattr(obj, "__dict__"), dict):
             return dict(vars(obj))
 
-        # Iterable of KV pairs
         if isinstance(obj, Sequence) and self._is_kv_pairs(obj):
             try:
                 return {k: v for k, v in obj}
@@ -220,62 +283,51 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
 
         return None
 
-    def _json_safe(self, obj, _depth=0, _max_depth=6):
+    def _json_safe(self, obj, _depth=0) -> Any:
         """Recursively convert obj into JSON-serializable types."""
-        if _depth > _max_depth:
+        if _depth > self._json_safe_max_depth:
             return str(obj)
 
         if obj is None or isinstance(obj, (bool, int, float, str)):
             return obj
 
-        # Common primitives
         if isinstance(obj, (datetime, date)):
             return obj.isoformat()
         if isinstance(obj, (UUID, Path)):
             return str(obj)
         if isinstance(obj, Enum):
-            # choose name for compactness; use value if you prefer
             return obj.name
         if isinstance(obj, (bytes, bytearray)):
-            # Avoid dumping binary directly
             return {"__bytes__": base64.b64encode(bytes(obj)).decode("ascii")}
 
-        # Mappings
         if isinstance(obj, Mapping):
             return {
-                str(self._json_safe(k, _depth + 1, _max_depth)): self._json_safe(
-                    v, _depth + 1, _max_depth
-                )
+                str(self._json_safe(k, _depth + 1)): self._json_safe(v, _depth + 1)
                 for k, v in obj.items()
             }
 
-        # Sequences & generators
         if isinstance(obj, (list, tuple, set, frozenset)) or isinstance(obj, Generator):
-            return [self._json_safe(x, _depth + 1, _max_depth) for x in list(obj)]
+            return [self._json_safe(x, _depth + 1) for x in list(obj)]
 
-        # Dataclass
         if dataclasses.is_dataclass(obj):
-            return self._json_safe(asdict(obj), _depth + 1, _max_depth)
+            return self._json_safe(asdict(obj), _depth + 1)
 
-        # Pydantic models
         md = getattr(obj, "model_dump", None)
         if callable(md):
             try:
-                return self._json_safe(obj.model_dump(), _depth + 1, _max_depth)
+                return self._json_safe(obj.model_dump(), _depth + 1)
             except Exception:
                 pass
         dd = getattr(obj, "dict", None)
         if callable(dd):
             try:
-                return self._json_safe(obj.dict(), _depth + 1, _max_depth)
+                return self._json_safe(obj.dict(), _depth + 1)
             except Exception:
                 pass
 
-        # Generic object
         if hasattr(obj, "__dict__") and isinstance(getattr(obj, "__dict__"), dict):
-            return self._json_safe(vars(obj), _depth + 1, _max_depth)
+            return self._json_safe(vars(obj), _depth + 1)
 
-        # Last resort
         return str(obj)
 
     def _unwrap_result_maybe(self, raw_outputs):
@@ -285,7 +337,8 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             and len(raw_outputs) == 1
             and "result" in raw_outputs
         ):
-            logger.debug("Unwrapped single-key 'result' in outputs")
+            if logger.isEnabledFor(10):
+                logger.debug("Unwrapped single-key 'result' in outputs")
             return raw_outputs["result"]
         return raw_outputs
 
@@ -308,7 +361,6 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
     def _merge_error_into_output(self, output, error):
         if error is None:
             return output
-        # embed error string under 'error' key, preserving existing output if mapping
         if isinstance(output, Mapping):
             merged = dict(output)
             merged["error"] = str(error)
@@ -316,48 +368,44 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         return {"result": output, "error": str(error)}
 
     def _build_trace(self, trace_name: str, executions: List[NodeExecution]) -> Trace:
-        """
-        Build a Trace from a list of executions.
-        - `created_at` = earliest node start time (or now).
-        - top-level input/output are taken from the request context, if present.
-        """
+        """Build a Trace from a list of executions (CPU-heavy)."""
         spans = [self._span_from_execution(e) for e in executions]
 
         ctx = get_current_context()
         top_input: Dict[str, Any] = (ctx.inputs or {}) if ctx else {}
 
-        # Ensure output is always a dictionary for the Trace model
         if ctx and ctx.outputs is not None:
-            if isinstance(ctx.outputs, dict):
-                top_output = ctx.outputs
-            else:
-                # Wrap non-dict outputs in a result field
-                top_output = {"result": ctx.outputs}
+            top_output = (
+                ctx.outputs
+                if isinstance(ctx.outputs, dict)
+                else {"result": ctx.outputs}
+            )
         else:
             top_output = {}
 
-        # Debug logging for trace inputs/outputs
-        logger.debug(
-            "Building trace",
-            trace_name=trace_name,
-            top_input=top_input,
-            top_output=top_output,
-            span_count=len(spans),
-        )
+        if logger.isEnabledFor(10):
+            # Avoid giant logs
+            def _truncate(v):
+                s = str(v)
+                return (
+                    (s[: self._max_logged_chars] + "…")
+                    if len(s) > self._max_logged_chars
+                    else s
+                )
 
-        for i, span in enumerate(spans):
             logger.debug(
-                "Span details",
-                span_number=i + 1,
-                span_name=span.name,
-                span_input=span.input,
-                span_output=span.output,
+                "Building trace",
+                trace_name=trace_name,
+                top_input=_truncate(top_input),
+                top_output=_truncate(top_output),
+                span_count=len(spans),
             )
 
-        if executions:
-            created_at = min(_utc(e.start_time) for e in executions)
-        else:
-            created_at = _utc(datetime.utcnow())
+        created_at = (
+            min(_utc(e.start_time) for e in executions)
+            if executions
+            else _utc(datetime.utcnow())
+        )
 
         return Trace(
             created_at=created_at,
@@ -367,11 +415,10 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             spans=spans,
         )
 
+    # ---------------------------- Submission ----------------------------
+
     async def _submit_trace(self, trace: Trace) -> bool:
-        """
-        Submit a single Trace inside CreateTracesInput.
-        Returns True on success; logs and returns False on failure.
-        """
+        """Submit a single Trace inside CreateTracesInput."""
         req = CreateTracesInput(
             agent_workspace_name=self.agent_workspace_name,
             agent_deployment_name=self.agent_deployment_name,
@@ -379,24 +426,16 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         )
 
         try:
-            logger.debug(
-                "Submitting trace to DigitalOcean",
-                workspace=self.agent_workspace_name,
-                deployment=self.agent_deployment_name,
-                trace_name=trace.name,
-                span_count=len(trace.spans),
-            )
-
-            for i, span in enumerate(trace.spans):
+            if logger.isEnabledFor(10):
                 logger.debug(
-                    "Trace span",
-                    span_number=i + 1,
-                    span_name=span.name,
-                    span_type=span.type,
+                    "Submitting trace to DigitalOcean",
+                    workspace=self.agent_workspace_name,
+                    deployment=self.agent_deployment_name,
+                    trace_name=trace.name,
+                    span_count=len(trace.spans),
                 )
 
             await self._client.create_traces(req)
-            logger.debug(f"Successfully submitted trace '{trace.name}' to DigitalOcean")
             return True
         except DOAPIError as e:
             logger.debug(
@@ -415,9 +454,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             return False
 
     async def _submit_current_trace(self) -> bool:
-        """
-        Build and submit the current context's trace.
-        """
+        """Build and submit the current context's trace."""
         ctx = get_current_context()
         if not ctx:
             logger.debug("No active context for trace submission")
@@ -434,7 +471,9 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             return True
 
         trace_name = f"{ctx.entrypoint_name} - {ctx.request_id[:8]}"
-        trace = self._build_trace(trace_name, executions)
+
+        # Offload heavy building to a thread to keep the loop snappy.
+        trace = await asyncio.to_thread(self._build_trace, trace_name, executions)
 
         ok = await self._submit_trace(trace)
         if ok:
@@ -461,7 +500,7 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
         if not ctx:
             return
 
-        # NEW: Only allow auto-submit on the synthetic completion node
+        # Only auto-submit on synthetic completion node
         meta = node_execution.metadata or {}
         is_request_complete = (
             node_execution.node_name == "RequestComplete"
@@ -471,54 +510,36 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             return
 
         rid = ctx.request_id
-        # NEW: De-dupe scheduling while a submission is in-flight or already done
-        if rid in self._submitted_traces or rid in self._submitting_traces:
-            return
+        with self._scheduler_lock:
+            if rid in self._submitted_traces or rid in self._submitting_traces:
+                return
+            self._submitting_traces.add(rid)
 
-        self._submitting_traces.add(rid)
-
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            try:
-                loop = asyncio.get_event_loop()
-            except RuntimeError:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-
-        task = loop.create_task(self._submit_current_trace())
-        self._inflight_tasks.add(task)
-
-        def _log_submission_result(t: asyncio.Task):
-            self._inflight_tasks.discard(t)
-            self._submitting_traces.discard(rid)
-            try:
-                success = t.result()
-                if success:
-                    logger.debug("Trace submitted to DigitalOcean successfully")
-                else:
-                    logger.debug("Failed to submit trace to DigitalOcean")
-            except Exception as e:
-                logger.debug(
-                    "Error during trace submission", error=str(e), exc_info=True
-                )
-
-        task.add_done_callback(_log_submission_result)
+        self._schedule_submit(rid)
 
     async def submit_trace_manually(self, trace_name: Optional[str] = None) -> bool:
-        """
-        Manually trigger submission for the current context (awaitable).
-        `trace_name` is currently derived from context; override could be added if needed.
-        """
+        """Manually trigger submission for the current context (awaitable)."""
         return await self._submit_current_trace()
 
     async def aclose(self) -> None:
         """
         Flush inflight submissions and close the underlying HTTP client.
+        Waits for:
+          - asyncio.Tasks scheduled on the current loop
+          - concurrent.futures.Futures from run_coroutine_threadsafe (cross-loop)
         """
+        # Await any tasks that are on our current loop
         if self._inflight_tasks:
             await asyncio.gather(*self._inflight_tasks, return_exceptions=True)
             self._inflight_tasks.clear()
+
+        # For cross-loop futures, block them *off* the event loop
+        if self._inflight_futures:
+            futs = list(self._inflight_futures)
+            self._inflight_futures.clear()
+            # Wait in a thread to avoid blocking the loop.
+            await asyncio.to_thread(concurrent.futures.wait, futs, timeout=None)
+
         await self._client.aclose()
 
     def print_summary(self) -> None:
@@ -529,5 +550,3 @@ class DigitalOceanTracesTracker(DefaultExecutionTracker):
             logger.debug("Trace submitted to DigitalOcean")
         elif not self.enable_auto_submit:
             logger.warning("⚠ Auto-submit disabled - call submit_trace_manually()")
-        # Note: For auto-submit enabled cases without successful submission,
-        # the result will be logged by the background task callback

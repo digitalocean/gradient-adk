@@ -12,6 +12,7 @@ from .models import (
     GetDefaultProjectResponse,
     TracingServiceJWTOutput,
     GetAgentWorkspaceDeploymentOutput,
+    GetAgentWorkspaceOutput,
     ListAgentWorkspacesOutput,
     CreateAgentDeploymentFileUploadPresignedURLInput,
     CreateAgentDeploymentFileUploadPresignedURLOutput,
@@ -137,6 +138,25 @@ class AsyncDigitalOceanGenAI:
         path = f"/gen-ai/agent-workspaces/{agent_workspace_name}/agent-deployments/{agent_deployment_name}"
         data = await self._get_json(path)
         return GetAgentWorkspaceDeploymentOutput(**data)
+
+    async def get_agent_workspace(
+        self, agent_workspace_name: str
+    ) -> GetAgentWorkspaceOutput:
+        """Get an agent workspace by name.
+
+        Args:
+            agent_workspace_name: The name of the agent workspace
+
+        Returns:
+            GetAgentWorkspaceOutput containing the agent workspace
+        """
+        logger.debug(
+            "Getting agent workspace",
+            agent_workspace_name=agent_workspace_name,
+        )
+        path = f"/gen-ai/agent-workspaces/{agent_workspace_name}"
+        data = await self._get_json(path)
+        return GetAgentWorkspaceOutput(**data)
 
     async def list_agent_workspaces(self) -> ListAgentWorkspacesOutput:
         """List all agent workspaces.

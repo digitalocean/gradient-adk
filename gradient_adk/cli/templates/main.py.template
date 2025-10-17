@@ -5,7 +5,7 @@ Simple test agent using the gradient agent runtime with LangGraph.
 import os
 from typing import Dict, TypedDict
 
-from gradient import Gradient
+from gradient import AsyncGradient
 from gradient_adk import entrypoint
 from gradient_adk.langgraph import attach_graph
 from langgraph.graph import StateGraph
@@ -18,17 +18,17 @@ class State(TypedDict):
     output: str
 
 
-def llm_call(state: State) -> State:
+async def llm_call(state: State) -> State:
     """Call the LLM"""
 
-    inference_client = Gradient(
+    inference_client = AsyncGradient(
         model_access_key=os.environ.get(
             "GRADIENT_MODEL_ACCESS_KEY"
         )
     )
 
     # Call the model
-    output = inference_client.chat.completions.create(
+    output = await inference_client.chat.completions.create(
         messages=[
             {
                 "role": "user",
@@ -45,7 +45,7 @@ def llm_call(state: State) -> State:
 
 
 @entrypoint
-def main(query: Dict, context: Dict):
+async def main(query: Dict, context: Dict):
     """Entrypoint"""
 
     # Setup the graph
@@ -62,4 +62,4 @@ def main(query: Dict, context: Dict):
     app = graph.compile()
     
     # Invoke the app
-    return app.invoke(initial_state)["output"]
+    return app.ainvoke(initial_state)["output"]

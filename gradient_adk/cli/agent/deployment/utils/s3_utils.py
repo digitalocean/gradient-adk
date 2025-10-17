@@ -46,5 +46,3 @@ class HttpxS3Uploader:
                 raise Exception(
                     f"Failed to upload file to S3: {response.status_code} - {response.text}"
                 )
-
-        logger.info(f"Successfully uploaded {file_path.name}")

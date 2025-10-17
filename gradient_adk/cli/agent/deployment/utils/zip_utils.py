@@ -53,7 +53,6 @@ class DirectoryZipCreator:
         if not source_dir.is_dir():
             raise ValueError(f"Source path is not a directory: {source_dir}")
 
-        logger.info(f"Creating zip archive: {output_path}")
         logger.debug(f"Source directory: {source_dir}")
         logger.debug(f"Exclude patterns: {self.exclude_patterns}")
 
@@ -65,10 +64,6 @@ class DirectoryZipCreator:
                     arcname = file_path.relative_to(source_dir)
                     logger.debug(f"Adding to zip: {arcname}")
                     zipf.write(file_path, arcname)
-
-        file_size = output_path.stat().st_size
-        logger.info(f"Created zip archive: {output_path.name} ({file_size} bytes)")
-
         return output_path
 
     def _should_exclude(self, file_path: Path, source_dir: Path) -> bool:

@@ -97,11 +97,7 @@ class DirectLaunchService(LaunchService):
             pass
 
     def _derive_module_name(self, entrypoint_file: str) -> str:
-        """Convert an entrypoint file path to a module name (best effort).
-
-        NOTE: This does not guarantee proper relative import support—users needing
-        relative imports should structure code as a package (see guidance).
-        """
+        """Convert an entrypoint file path to a module name (best effort)."""
         return entrypoint_file.replace(".py", "").replace("/", ".").replace("\\", ".")
 
     def _start_server(
@@ -113,10 +109,7 @@ class DirectLaunchService(LaunchService):
         reload: bool = False,
         dev_banner: bool = False,
     ) -> None:
-        """Start the FastAPI server (in-process uvicorn).
-
-        This keeps things simple; relative imports require user packaging.
-        """
+        """Start the FastAPI server (in-process uvicorn)."""
         # Resolve entrypoint path relative to the current working directory
         original_cwd = Path.cwd()
         entry_path = (original_cwd / entrypoint_file).resolve()
@@ -124,14 +117,14 @@ class DirectLaunchService(LaunchService):
         module_name = entry_path.stem  # Use file name without extension
 
         if dev_banner:
-            typer.echo(f"📂 Entrypoint: {entrypoint_file}")
-            typer.echo(f"🌐 Server: http://{host}:{port}")
-            typer.echo(f"🏷️  Agent: {agent_name}")
-            typer.echo(f"🌐 Entrypoint endpoint: http://{host}:{port}/completions")
+            typer.echo(f"Entrypoint: {entrypoint_file}")
+            typer.echo(f"Server: http://{host}:{port}")
+            typer.echo(f"Agent: {agent_name}")
+            typer.echo(f"Entrypoint endpoint: http://{host}:{port}/completions")
             typer.echo("Auto-reload enabled - server will restart on file changes")
             typer.echo("Press Ctrl+C to stop the server\n")
         else:
-            typer.echo(f"Starting {agent_name} server...")
+            typer.echo(f"Starting {agent_name}...")
             typer.echo(f"Server will be accessible at http://{host}:{port}")
             typer.echo("Press Ctrl+C to stop the server")
 
@@ -181,10 +174,10 @@ class DirectLaunchService(LaunchService):
                     except Exception:
                         pass
         except ImportError as e:
-            typer.echo(f"❌ Unable to import module '{module_name}': {e}", err=True)
+            typer.echo(f"Unable to import module '{module_name}': {e}", err=True)
             raise typer.Exit(1)
         except Exception as e:
-            typer.echo(f"❌ Server failed to start: {e}", err=True)
+            typer.echo(f"Server failed to start: {e}", err=True)
             raise typer.Exit(1)
 
     # _start_dev_server removed; unified into _start_server with flags.
@@ -208,9 +201,4 @@ class DirectLaunchService(LaunchService):
         typer.echo("  def main(query, context):")
         typer.echo("      return {'result': 'Hello World'}")
         typer.echo("  ")
-        typer.echo(
-            "  # The decorator automatically creates 'app' - no manual assignment needed!"
-        )
-        typer.echo("  # You can now run: uvicorn main:app")
-        typer.echo("")
         typer.echo("Note: The entrypoint function must accept exactly 2 parameters")
