@@ -5,7 +5,7 @@ from langgraph.graph.message import add_messages
 from langchain_core.tools import tool
 from typing import TypedDict, Annotated, List
 import os, time, json
-from gradient import Gradient
+from gradient import AsyncGradient
 from gradient_adk import entrypoint
 
 from gradient_adk.langgraph import attach_graph
@@ -24,7 +24,7 @@ class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], add_messages]
 
 
-inference_client = Gradient(
+inference_client = AsyncGradient(
     model_access_key=os.environ.get("GRADIENT_MODEL_ACCESS_KEY")
 )
 
@@ -50,7 +50,7 @@ def _to_openai_tool_schema(tool_obj):
 tool_schemas = [_to_openai_tool_schema(t) for t in tools]
 
 
-def call_model(state: AgentState):
+async def call_model(state: AgentState):
     msgs = []
     for m in state["messages"]:
         if isinstance(m, HumanMessage):
@@ -69,7 +69,7 @@ def call_model(state: AgentState):
         else:
             raise ValueError(f"Unsupported message type: {type(m)}")
 
-    resp = inference_client.chat.completions.create(
+    resp = await inference_client.chat.completions.create(
         model="llama3.3-70b-instruct",
         messages=msgs,
         tools=tool_schemas,
@@ -122,8 +122,8 @@ workflow = graph.compile()
 
 
 @entrypoint
-def entry(data, context):
+async def entry(data, context):
     query = data["query"]
     inputs = {"messages": [HumanMessage(content=query)]}
-    result = workflow.invoke(inputs)
+    result = workflow.ainvoke(inputs)
     return result

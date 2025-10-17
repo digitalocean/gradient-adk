@@ -8,8 +8,8 @@ from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
 from langgraph.graph import StateGraph
 from langgraph.graph.message import add_messages
 
-from gradient import Gradient
-from gradient_adk import entrypoint, stream_json
+from gradient import AsyncGradient
+from gradient_adk import entrypoint
 from gradient_adk.langgraph import attach_graph
 from gradient_adk.streaming import stream_events
 
@@ -20,7 +20,7 @@ class AgentState(TypedDict, total=False):
     _delta: str  # scratch: most recent token from node
 
 
-inference = Gradient(model_access_key=os.environ.get("GRADIENT_MODEL_ACCESS_KEY"))
+inference = AsyncGradient(model_access_key=os.environ.get("GRADIENT_MODEL_ACCESS_KEY"))
 MODEL_ID = os.getenv("GRADIENT_MODEL_ID", "llama3.3-70b-instruct")
 
 SYSTEM_PROMPT = (
@@ -37,7 +37,7 @@ class AgentState(TypedDict, total=False):
     _delta: str  # scratch: most recent token from node
 
 
-def call_model(state: AgentState):
+async def call_model(state: AgentState):
     msgs = [{"role": "system", "content": SYSTEM_PROMPT}]
     for m in state["messages"]:
         if isinstance(m, HumanMessage):
@@ -51,7 +51,7 @@ def call_model(state: AgentState):
 
     if should_stream:
         # optional: announce an empty assistant message so downstream renderers have something to append to
-        yield {"messages": [AIMessage(content="")]}  # instrumentor sees this
+        yield {"messages": [AIMessage(content="")]}
 
         stream = inference.chat.completions.create(
             model=MODEL_ID,
@@ -76,8 +76,6 @@ def call_model(state: AgentState):
 
             if content:
                 collected.append(content)
-                # Emit a token delta as a node *output*.
-                # Your instrumentor will capture this.
                 yield {"_delta": content}
 
         final_text = "".join(collected)
@@ -85,7 +83,7 @@ def call_model(state: AgentState):
         yield {"messages": [AIMessage(content=final_text)], "_delta": ""}  # clear delta
         return  # end node
     else:
-        resp = inference.chat.completions.create(model=MODEL_ID, messages=msgs)
+        resp = await inference.chat.completions.create(model=MODEL_ID, messages=msgs)
         text = resp.choices[0].message.content or ""
         return {"messages": [AIMessage(content=text)]}
 
@@ -121,9 +119,8 @@ def _stream_chat(query: str):
 
 
 @entrypoint
-def entry(data, context):
+async def entry(data, context):
     query = (data or {}).get("query", "").strip()
-    wants_stream = bool((data or {}).get("stream", True))
 
     # default empty prompt path
     if not query:
@@ -148,27 +145,4 @@ def entry(data, context):
         text = "".join(buf) if buf else (last_ai.content if last_ai else "")
         return {"answer": text}
 
-    if wants_stream:
-        # SSE path (client wants streaming)
-        return stream_events(_stream_chat(query))
-    else:
-        # Non-SSE path (client wants final only) — still drive the generator node to completion
-        buf = []
-        last_ai = None
-        for update in workflow.stream(
-            {
-                "messages": [HumanMessage(content=query)],
-                "_stream": True,
-            },  # force node streaming
-            stream_mode="updates",
-        ):
-            if update.get("_delta"):
-                buf.append(update["_delta"])
-            msgs = update.get("messages")
-            if msgs:
-                for m in reversed(msgs):
-                    if isinstance(m, AIMessage):
-                        last_ai = m
-                        break
-        text = "".join(buf) if buf else (last_ai.content if last_ai else "")
-        return {"answer": text}
+    return await stream_events(_stream_chat(query))
