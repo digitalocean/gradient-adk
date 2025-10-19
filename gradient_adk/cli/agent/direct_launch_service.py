@@ -44,7 +44,6 @@ class DirectLaunchService(LaunchService):
                 agent_name, entrypoint_file, host, port, reload=True, dev_banner=True
             )
         else:
-            typer.echo("🚀 Running in production mode...")
             self._import_entrypoint_module(entrypoint_file)
             self._start_server(
                 agent_name, entrypoint_file, host, port, reload=False, dev_banner=False
@@ -120,7 +119,7 @@ class DirectLaunchService(LaunchService):
             typer.echo(f"Entrypoint: {entrypoint_file}")
             typer.echo(f"Server: http://{host}:{port}")
             typer.echo(f"Agent: {agent_name}")
-            typer.echo(f"Entrypoint endpoint: http://{host}:{port}/completions")
+            typer.echo(f"Entrypoint endpoint: http://{host}:{port}/run")
             typer.echo("Auto-reload enabled - server will restart on file changes")
             typer.echo("Press Ctrl+C to stop the server\n")
         else:
@@ -198,7 +197,7 @@ class DirectLaunchService(LaunchService):
         typer.echo("  from gradient_adk import entrypoint")
         typer.echo("  ")
         typer.echo("  @entrypoint")
-        typer.echo("  def main(query, context):")
+        typer.echo("  async def main(query, context):")
         typer.echo("      return {'result': 'Hello World'}")
         typer.echo("  ")
         typer.echo("Note: The entrypoint function must accept exactly 2 parameters")

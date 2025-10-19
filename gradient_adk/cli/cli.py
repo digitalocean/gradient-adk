@@ -4,20 +4,11 @@ from typing import Optional
 import typer
 import importlib.metadata
 
-from .agent import (
-    AgentConfigService,
-    LaunchService,
-    DeployService,
-    AgentDeployService,
-    TracesService,
-    ConfigReader,
-    YamlAgentConfigService,
-    DirectLaunchService,
-    GalileoTracesService,
-    YamlConfigReader,
-    get_do_api_token,
-    EnvironmentError,
-)
+from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigManager
+from gradient_adk.cli.agent.deployment.deploy_service import AgentDeployService
+from gradient_adk.cli.agent.direct_launch_service import DirectLaunchService
+from gradient_adk.cli.agent.traces_service import GalileoTracesService
+from gradient_adk.cli.agent.env_utils import get_do_api_token, EnvironmentError
 
 
 def get_version() -> str:
@@ -28,9 +19,8 @@ def get_version() -> str:
         return "unknown"
 
 
-_agent_config_service = YamlAgentConfigService()
+_agent_config_manager = YamlAgentConfigManager()
 _launch_service = DirectLaunchService()
-_config_reader = YamlConfigReader()
 
 
 def version_callback(value: bool):
@@ -66,18 +56,6 @@ agent_app = typer.Typer(
 app.add_typer(agent_app, name="agent")
 
 
-def get_agent_config_service() -> AgentConfigService:
-    return _agent_config_service
-
-
-def get_launch_service() -> LaunchService:
-    return _launch_service
-
-
-def get_config_reader() -> ConfigReader:
-    return _config_reader
-
-
 def _configure_agent(
     agent_name: Optional[str] = None,
     deployment_name: Optional[str] = None,
@@ -90,23 +68,21 @@ def _configure_agent(
     if skip_entrypoint_prompt and interactive:
         # Handle the prompts manually for init case
         if agent_name is None:
-            agent_name = typer.prompt("Agent name")
+            agent_name = typer.prompt("Agent workspace name")
         if deployment_name is None:
             deployment_name = typer.prompt("Agent deployment name", default="main")
         # entrypoint_file is already set and we don't prompt for it
 
         # Now call configure in non-interactive mode since we have all values
-        agent_config_service = get_agent_config_service()
-        agent_config_service.configure(
+        _agent_config_manager.configure(
             agent_name=agent_name,
             agent_environment=deployment_name,
             entrypoint_file=entrypoint_file,
             interactive=False,
         )
     else:
-        # Normal configure case - let the service handle prompts
-        agent_config_service = get_agent_config_service()
-        agent_config_service.configure(
+        # Normal configure case - let the manager handle prompts
+        _agent_config_manager.configure(
             agent_name=agent_name,
             agent_environment=deployment_name,
             entrypoint_file=entrypoint_file,
@@ -118,16 +94,13 @@ def _create_project_structure() -> None:
     """Create the project structure with folders and template files."""
     import pathlib
 
-    typer.echo("\n📁 Creating project structure...")
-
     # Define folders to create
-    folders_to_create = ["agents", "datasets", "evaluations", "tools"]
+    folders_to_create = ["agents", "tools"]
 
     for folder in folders_to_create:
         folder_path = pathlib.Path(folder)
         if not folder_path.exists():
             folder_path.mkdir(exist_ok=True)
-            typer.echo(f"   Created folder: {folder}/")
 
     # Create main.py if it doesn't exist
     main_py_path = pathlib.Path("main.py")
@@ -137,7 +110,6 @@ def _create_project_structure() -> None:
         if template_path.exists():
             main_py_content = template_path.read_text()
             main_py_path.write_text(main_py_content)
-            typer.echo("   Created file: main.py")
 
     # Create .gitignore if it doesn't exist
     gitignore_path = pathlib.Path(".gitignore")
@@ -149,7 +121,6 @@ __pycache__/
 .env
 """
         gitignore_path.write_text(gitignore_content)
-        typer.echo("   Created file: .gitignore")
 
     # Create requirements.txt if it doesn't exist
     requirements_path = pathlib.Path("requirements.txt")
@@ -160,16 +131,12 @@ langchain-core
 gradient
 """
         requirements_path.write_text(requirements_content)
-        typer.echo("   Created file: requirements.txt")
 
     # Create a .env file with placeholder variables if it doesn't exist
     env_path = pathlib.Path(".env")
     if not env_path.exists():
         env_content = ""
         env_path.write_text(env_content)
-        typer.echo("   Created file: .env")
-
-    typer.echo("\n✅ Project structure created successfully!")
 
 
 @agent_app.command("init")
@@ -202,11 +169,9 @@ def agent_init(
 
     typer.echo("\n🚀 Next steps:")
     typer.echo("   1. Edit main.py to implement your agent logic")
-    typer.echo("   2. Add your datasets to the datasets/ folder")
-    typer.echo("   3. Create evaluation scripts in evaluations/")
-    typer.echo("   4. Add custom tools to the tools/ folder")
-    typer.echo("   5. Run 'gradient agent run' to test locally")
-    typer.echo("   6. Use 'gradient agent deploy' when ready to deploy")
+    typer.echo("   2. Add custom tools to the tools/ folder")
+    typer.echo("   3. Run 'gradient agent run' to test locally")
+    typer.echo("   4. Use 'gradient agent deploy' when ready to deploy")
 
 
 @agent_app.command("configure")
@@ -267,8 +232,7 @@ def agent_run(
 
         configure_logging()
 
-    launch_service = get_launch_service()
-    launch_service.launch_locally(dev_mode=dev, host=host, port=port)
+    _launch_service.launch_locally(dev_mode=dev, host=host, port=port)
 
 
 @agent_app.command("deploy")
@@ -288,9 +252,8 @@ def agent_deploy(
 
     try:
         # Get configuration
-        config_reader = get_config_reader()
-        agent_workspace_name = config_reader.get_agent_name()
-        agent_deployment_name = config_reader.get_agent_environment()
+        agent_workspace_name = _agent_config_manager.get_agent_name()
+        agent_deployment_name = _agent_config_manager.get_agent_environment()
 
         # Get API token
         if not api_token:
@@ -310,13 +273,29 @@ def agent_deploy(
                 deploy_service = AgentDeployService(client=client)
 
                 # Deploy from current directory
-                await deploy_service.deploy_agent(
+                workspace_uuid = await deploy_service.deploy_agent(
                     agent_workspace_name=agent_workspace_name,
                     agent_deployment_name=agent_deployment_name,
                     source_dir=Path.cwd(),
                     project_id=project_id,
                     api_token=api_token,
                 )
+
+                typer.echo(
+                    f"Agent deployed successfully! ({agent_workspace_name}/{agent_deployment_name})"
+                )
+                invoke_url = "https://agents.do-ai.run"
+                header_value = f"{workspace_uuid}/{agent_deployment_name}"
+
+                typer.echo(
+                    f"To invoke your deployed agent, send a POST request to {invoke_url}"
+                )
+                typer.echo(
+                    f"API requests must include the header: DO-Agent: {header_value}"
+                )
+                example_cmd = f"""Example:
+  curl -X POST {invoke_url} -H "Content-Type: application/json" -H "DO-Agent: {header_value}" -d '{{"input": "hello"}}' """
+                typer.echo(example_cmd)
 
         asyncio.run(deploy())
 
@@ -346,9 +325,8 @@ def agent_traces(
 
     try:
         # Get configuration
-        config_reader = get_config_reader()
-        agent_workspace_name = config_reader.get_agent_name()
-        agent_deployment_name = config_reader.get_agent_environment()
+        agent_workspace_name = _agent_config_manager.get_agent_name()
+        agent_deployment_name = _agent_config_manager.get_agent_environment()
 
         # Get API token
         if not api_token:
@@ -398,9 +376,8 @@ def agent_logs(
 
     try:
         # Get configuration
-        config_reader = get_config_reader()
-        agent_workspace_name = config_reader.get_agent_name()
-        agent_deployment_name = config_reader.get_agent_environment()
+        agent_workspace_name = _agent_config_manager.get_agent_name()
+        agent_deployment_name = _agent_config_manager.get_agent_environment()
 
         # Get API token
         if not api_token:

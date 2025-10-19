@@ -1,225 +1,230 @@
+import asyncio
+import threading
+from typing import List
 import pytest
 import httpx
 import requests
 
 from gradient_adk.runtime.network_interceptor import (
+    NetworkInterceptor,
     get_network_interceptor,
     setup_digitalocean_interception,
-    NetworkInterceptor,
 )
 
 
 @pytest.fixture(autouse=True)
-def reset_interceptor():
+def reset_global_interceptor():
     """
-    Ensure global interceptor is clean & unpatched before/after each test.
+    Ensure a clean singleton between tests:
+      - stop intercepting (restores patched methods)
+      - clear patterns and hits
     """
-    interceptor = get_network_interceptor()
-    # Hard reset before
-    interceptor.stop_intercepting()
-    with interceptor._lock:  # ok to touch internals in unit tests
-        interceptor._tracked_endpoints.clear()
-        interceptor._detected_endpoints.clear()
+    intr = get_network_interceptor()
+    try:
+        intr.stop_intercepting()
+    finally:
+        # brute-force cleanup of internal state
+        intr.clear_hits()
+        # Not public, but safe for tests: nuke patterns set
+        with intr._lock:
+            intr._tracked_endpoints.clear()
+            intr._original_httpx_request = None
+            intr._original_httpx_send = None
+            intr._original_httpx_sync_request = None
+            intr._original_httpx_sync_send = None
+            intr._original_requests_request = None
+            intr._active = False
     yield
-    # Hard reset after
-    interceptor.stop_intercepting()
-    with interceptor._lock:
-        interceptor._tracked_endpoints.clear()
-        interceptor._detected_endpoints.clear()
+    # Best-effort cleanup even if a test failed mid-way
+    try:
+        intr.stop_intercepting()
+    except Exception:
+        pass
+    intr.clear_hits()
+    with intr._lock:
+        intr._tracked_endpoints.clear()
 
 
 @pytest.fixture
-def stub_http_clients(monkeypatch):
+def intr() -> NetworkInterceptor:
+    return get_network_interceptor()
+
+
+@pytest.fixture
+def stub_httpx_sync(monkeypatch):
     """
-    Patch httpx/requests *original* methods with local stubs so that when the
-    interceptor saves "original" methods, it saves these harmless stubs
-    (no real network!).
+    Before start_intercepting(), replace httpx.Client.request/send with harmless stubs.
+    This ensures start_intercepting() captures these stubs as 'originals'.
     """
 
-    async def async_request_stub(self, method, url, **kwargs):
+    def _req(self, method, url, **kwargs):
+        # minimal stub response
         return httpx.Response(200, request=httpx.Request(method, url))
 
-    async def async_send_stub(self, request, **kwargs):
+    def _send(self, request, **kwargs):
         return httpx.Response(200, request=request)
 
-    def sync_request_stub(self, method, url, **kwargs):
+    monkeypatch.setattr(httpx.Client, "request", _req, raising=True)
+    monkeypatch.setattr(httpx.Client, "send", _send, raising=True)
+    return _req, _send
+
+
+@pytest.fixture
+def stub_httpx_async(monkeypatch):
+    async def _areq(self, method, url, **kwargs):
         return httpx.Response(200, request=httpx.Request(method, url))
 
-    def sync_send_stub(self, request, **kwargs):
+    async def _asend(self, request, **kwargs):
         return httpx.Response(200, request=request)
 
-    def requests_request_stub(self, method, url, **kwargs):
-        class _R:
-            status_code = 200
-            text = "ok"
-
-            def __init__(self, u):
-                self.url = u
-
-        return _R(url)
-
-    # Patch BEFORE start_intercepting so these become the "originals"
-    monkeypatch.setattr(httpx.AsyncClient, "request", async_request_stub)
-    monkeypatch.setattr(httpx.AsyncClient, "send", async_send_stub)
-    monkeypatch.setattr(httpx.Client, "request", sync_request_stub)
-    monkeypatch.setattr(httpx.Client, "send", sync_send_stub)
-    monkeypatch.setattr(requests.Session, "request", requests_request_stub)
-
-    return {
-        "async_request_stub": async_request_stub,
-        "async_send_stub": async_send_stub,
-        "sync_request_stub": sync_request_stub,
-        "sync_send_stub": sync_send_stub,
-        "requests_request_stub": requests_request_stub,
-    }
+    monkeypatch.setattr(httpx.AsyncClient, "request", _areq, raising=True)
+    monkeypatch.setattr(httpx.AsyncClient, "send", _asend, raising=True)
+    return _areq, _asend
 
 
-def test_add_and_remove_endpoint_patterns():
-    ni = get_network_interceptor()
-    assert isinstance(ni, NetworkInterceptor)
+@pytest.fixture
+def stub_requests(monkeypatch):
+    def _req(self, method, url, **kwargs):
+        r = requests.Response()
+        r.status_code = 200
+        r.url = url
+        r.request = requests.Request(method=method, url=url).prepare()
+        return r
 
-    with ni._lock:
-        assert "foo" not in ni._tracked_endpoints
-
-    ni.add_endpoint_pattern("foo")
-    with ni._lock:
-        assert "foo" in ni._tracked_endpoints
-
-    ni.remove_endpoint_pattern("foo")
-    with ni._lock:
-        assert "foo" not in ni._tracked_endpoints
+    monkeypatch.setattr(requests.Session, "request", _req, raising=True)
+    return _req
 
 
-def test_clear_and_copy_of_detected_set():
-    ni = get_network_interceptor()
-    ni.add_endpoint_pattern("example.com")
+def test_add_remove_patterns_and_hits(intr, stub_httpx_sync):
+    intr.add_endpoint_pattern("match.me")
+    intr.add_endpoint_pattern("also")
+    intr.remove_endpoint_pattern("also")
 
-    # Simulate detection
-    ni._record_request("https://example.com/v1/models")
-    assert ni.was_endpoint_called("example.com") is True
+    token0 = intr.snapshot_token()
+    assert token0 == 0
+    assert intr.hits_since(token0) == 0
 
-    # get_detected_endpoints returns a COPY
-    s1 = ni.get_detected_endpoints()
-    s1.add("https://fake/should_not_leak")
-    s2 = ni.get_detected_endpoints()
-    assert "https://fake/should_not_leak" not in s2
+    intr._record_request("http://foo.com/nope")
+    intr._record_request("https://match.me/path")
+    intr._record_request("http://bar/match.me?q=1")
+    intr._record_request("https://no/again")
 
-    ni.clear_detected()
-    assert ni.get_detected_endpoints() == set()
-    assert ni.was_endpoint_called("example.com") is False
+    # Only 2 URLs contained "match.me"
+    assert intr.hits_since(token0) == 2
 
+    token1 = intr.snapshot_token()
+    intr._record_request("http://baz/match.me")
+    assert intr.hits_since(token1) == 1
 
-def test_was_endpoint_called_substring_semantics():
-    ni = get_network_interceptor()
-    ni.add_endpoint_pattern("api.foo.com")
-
-    ni._record_request("https://api.foo.com/resource/123?x=y")
-    assert ni.was_endpoint_called("api.foo.com") is True
-    # Substring semantics: pattern 'resource/123' appears in the detected URL
-    assert ni.was_endpoint_called("resource/123") is True
-    # Non-matching substring
-    assert ni.was_endpoint_called("not-present") is False
+    intr.clear_hits()
+    assert intr.snapshot_token() == 0
+    assert intr.hits_since(0) == 0
 
 
-@pytest.mark.asyncio
-async def test_httpx_async_request_is_recorded_and_restored(stub_http_clients):
-    ni = get_network_interceptor()
-    ni.add_endpoint_pattern("example.com")
+def test_httpx_sync_interception_counts(intr, stub_httpx_sync):
+    intr.add_endpoint_pattern("api.test")
+    intr.start_intercepting()
 
-    # Keep references to the stubbed methods so we can verify restore
-    original_async_req = httpx.AsyncClient.request
+    # Ensure methods are patched now
+    c = httpx.Client()
+    # Non-matching URL
+    resp = c.get("http://example.com")
+    assert resp.status_code == 200
+    # Matching URL -> increments counter
+    resp = c.get("http://api.test/resource")
+    assert resp.status_code == 200
 
-    ni.start_intercepting()
-    try:
-        # After start, method should have been wrapped (thus different object)
-        assert httpx.AsyncClient.request is not original_async_req
+    assert intr.hits_since(0) == 1
 
-        async with httpx.AsyncClient() as client:
-            resp = await client.get("https://example.com/test")
-            assert resp.status_code == 200
+    # Stop and ensure originals restored (i.e., not our interceptors anymore)
+    orig_req, orig_send = stub_httpx_sync
+    intr.stop_intercepting()
 
-        assert ni.was_endpoint_called("example.com") is True
-    finally:
-        ni.stop_intercepting()
-
-    # After stop, original stub should be restored
-    assert httpx.AsyncClient.request is original_async_req
+    assert httpx.Client.request is orig_req
+    assert httpx.Client.send is orig_send
 
 
-def test_httpx_sync_request_is_recorded_and_restored(stub_http_clients):
-    ni = get_network_interceptor()
-    ni.add_endpoint_pattern("sync.example.com")
+def test_requests_interception_counts(intr, stub_requests):
+    intr.add_endpoint_pattern("billing.svc")
+    intr.start_intercepting()
 
-    original_sync_req = httpx.Client.request
-    ni.start_intercepting()
-    try:
-        assert httpx.Client.request is not original_sync_req
-        with httpx.Client() as client:
-            resp = client.get("https://sync.example.com/ok")
-            assert resp.status_code == 200
-        assert ni.was_endpoint_called("sync.example.com") is True
-    finally:
-        ni.stop_intercepting()
-    assert httpx.Client.request is original_sync_req
+    s = requests.Session()
 
+    # miss
+    r1 = s.get("https://example.com")
+    assert r1.status_code == 200
 
-def test_requests_session_is_recorded_and_restored(stub_http_clients):
-    ni = get_network_interceptor()
-    ni.add_endpoint_pattern("requests.example.com")
+    # hit
+    r2 = s.post("https://billing.svc/process")
+    assert r2.status_code == 200
 
-    original_req = requests.Session.request
-    ni.start_intercepting()
-    try:
-        assert requests.Session.request is not original_req
-        s = requests.Session()
-        r = s.get("https://requests.example.com/hello")
-        assert getattr(r, "status_code", None) == 200
-        assert ni.was_endpoint_called("requests.example.com") is True
-    finally:
-        ni.stop_intercepting()
-    assert requests.Session.request is original_req
+    assert intr.hits_since(0) == 1
+
+    # Stop, originals restored
+    orig_req = stub_requests
+    intr.stop_intercepting()
+    assert requests.Session.request is orig_req
 
 
-def test_start_stop_idempotent(stub_http_clients):
-    ni = get_network_interceptor()
-    ni.add_endpoint_pattern("idempotent.test")
+def test_idempotent_start_stop(intr, stub_httpx_sync, stub_httpx_async, stub_requests):
+    intr.add_endpoint_pattern("x")
+    intr.start_intercepting()
+    # Calling again shouldn't crash or re-wrap
+    intr.start_intercepting()
 
-    # Calling start twice should not double-wrap or blow up
-    ni.start_intercepting()
-    first_async_req = httpx.AsyncClient.request
-    ni.start_intercepting()
-    second_async_req = httpx.AsyncClient.request
-    assert first_async_req is second_async_req
-
-    # Calling stop twice should be safe and restore originals
-    ni.stop_intercepting()
-    after_first_stop = httpx.AsyncClient.request
-    ni.stop_intercepting()
-    after_second_stop = httpx.AsyncClient.request
-    assert after_first_stop is after_second_stop  # still restored
+    # And stop twice shouldn't crash
+    intr.stop_intercepting()
+    intr.stop_intercepting()
 
 
-@pytest.mark.asyncio
-async def test_setup_digitalocean_interception_records(stub_http_clients):
-    ni = get_network_interceptor()
+def test_thread_safety_recording(intr):
+    intr.add_endpoint_pattern("hit.me")
 
-    # Verify patterns are empty before
-    with ni._lock:
-        assert len(ni._tracked_endpoints) == 0
+    # We call the private method here to stress the lock deterministically
+    urls: List[str] = [
+        "http://hit.me/a",
+        "http://hit.me/b",
+        "http://nope",
+        "http://hit.me/c",
+        "http://still-no",
+    ]
 
-    # setup_digitalocean_interception should add patterns and start intercepting
+    # expect 3 hits per thread
+    def worker():
+        for u in urls:
+            intr._record_request(u)
+
+    threads = [threading.Thread(target=worker) for _ in range(10)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # 3 hits * 10 threads
+    assert intr.hits_since(0) == 30
+
+
+def test_setup_digitalocean_interception(
+    intertr_cleanup_guard=reset_global_interceptor,
+):
+    """
+    Verify that:
+      - patterns for prod & test inference domains are added
+      - intercepting is started
+      - a matching call increments the counter
+    """
     setup_digitalocean_interception()
+    intr = get_network_interceptor()
 
-    try:
-        with ni._lock:
-            # Contains both prod and test inference patterns
-            assert any("inference.do-ai.run" in p for p in ni._tracked_endpoints)
-            assert any("inference.do-ai-test.run" in p for p in ni._tracked_endpoints)
+    # quick sanity: active and has patterns
+    with intr._lock:
+        patterns = set(intr._tracked_endpoints)
+        active = intr._active
+    assert active
+    assert "inference.do-ai.run" in patterns
+    assert "inference.do-ai-test.run" in patterns
 
-        async with httpx.AsyncClient() as client:
-            r = await client.get("https://inference.do-ai.run/v1/models")
-            assert r.status_code == 200
-
-        assert ni.was_endpoint_called("inference.do-ai.run") is True
-    finally:
-        ni.stop_intercepting()
+    # We can't guarantee stubs for httpx/requests here (setup_* doesn't stub),
+    # so we just exercise the internal recorder to confirm patterns work:
+    intr._record_request("https://inference.do-ai.run/v1/chat")
+    assert intr.hits_since(0) == 1

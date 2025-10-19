@@ -1,112 +1,118 @@
-"""
-Gradient entrypoint decorator for creating FastAPI agents.
-
-Simple decorator that wraps a function with FastAPI endpoints.
-"""
-
 from __future__ import annotations
 import inspect
-from typing import Callable
+from typing import Callable, Optional, Any, Dict
+
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
 import uvicorn
 
 from .logging import get_logger
-from .runtime.manager import get_runtime_manager
-from .runtime.context import get_current_context
+from .streaming import StreamingResponse as GradientStreamingResponse
 
 logger = get_logger(__name__)
+
+from gradient_adk.runtime.langgraph.helpers import capture_graph, get_tracker
+
+capture_graph()
 
 
 def entrypoint(func: Callable) -> Callable:
     """
-    Decorator that creates a FastAPI app from a function and automatically
-    makes it available as 'app' in the module.
-
-    The decorated function must accept exactly 2 parameters:
-    1. data: The request data (dict)
-    2. context: The request context object
-
-    Example:
-        @entrypoint
-        def my_agent(data, context):
-            return {"message": "Hello", "data": data}
-
-        # Now 'app' is automatically available for uvicorn:
-        # uvicorn main:app
+    Decorator that creates a FastAPI app and exposes it as `app` in the caller module.
+    The decorated function must accept exactly (data, context).
     """
-    # Validate that the function has exactly 2 parameters
     sig = inspect.signature(func)
-    params = list(sig.parameters.keys())
-    if len(params) != 2:
-        raise ValueError(
-            f"Entrypoint function '{func.__name__}' must have exactly 2 parameters (data, context), "
-            f"but has {len(params)}: {params}"
-        )
+    if len(sig.parameters) != 2:
+        raise ValueError(f"{func.__name__} must accept exactly (data, context)")
 
-    # Create FastAPI app
-    fastapi_app = FastAPI(
-        title=f"Gradient Agent - {func.__name__}",
-        description=f"Gradient ADK build agent.",
-        version="1.0.0",
-    )
+    app = FastAPI(title=f"Gradient Agent - {func.__name__}", version="1.0.0")
 
-    @fastapi_app.post("/completions", response_model=None)
-    async def completions(req: Request):
-        runtime_manager = get_runtime_manager()
+    @app.on_event("shutdown")
+    async def _shutdown():
+        # Flush pending trace submissions if a tracker exists
         try:
-            # Get raw JSON body
-            try:
-                body = await req.json()
-            except Exception as e:
-                raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+            tr = get_tracker()
+            if tr and hasattr(tr, "aclose"):
+                await tr.aclose()
+        except Exception:
+            pass
 
-            context = get_current_context()
-
-            # Call the user's function
-            result = await runtime_manager.run_entrypoint(func, body, context)
-
-            # Handle gradient streaming responses
-            from .streaming import StreamingResponse as GradientStreamingResponse
-
-            if isinstance(result, GradientStreamingResponse):
-                from fastapi.responses import (
-                    StreamingResponse as FastAPIStreamingResponse,
-                )
-
-                return FastAPIStreamingResponse(
-                    result.content, media_type=result.media_type, headers=result.headers
-                )
-
-            return result
-
+    @app.post("/run")
+    async def run(req: Request):
+        # Parse JSON
+        try:
+            body = await req.json()
         except Exception as e:
-            logger.error("Error in entrypoint", error=str(e), exc_info=True)
+            raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+
+        # Start request in tracker (if available)
+        tr = None
+        try:
+            tr = get_tracker()
+            if tr:
+                tr.on_request_start(func.__name__, body)
+        except Exception:
+            pass
+
+        # Call user function (context optional; pass None)
+        try:
+            if inspect.iscoroutinefunction(func):
+                result = await func(body, None)
+            else:
+                result = func(body, None)
+        except Exception as e:
+            try:
+                if tr:
+                    tr.on_request_end(outputs=None, error=str(e))
+            except Exception:
+                pass
+            logger.error("Error in /run", error=str(e), exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
-    @fastapi_app.get("/health")
+        # Streaming responses
+        if isinstance(result, GradientStreamingResponse):
+
+            async def _wrap(gen):
+                try:
+                    async for chunk in gen:
+                        yield chunk
+                    if tr:
+                        try:
+                            tr.on_request_end(outputs=None, error=None)
+                        except Exception:
+                            pass
+                except Exception as e:
+                    if tr:
+                        try:
+                            tr.on_request_end(outputs=None, error=str(e))
+                        except Exception:
+                            pass
+                    raise
+
+            return FastAPIStreamingResponse(
+                _wrap(result.content),
+                media_type=result.media_type,
+                headers=result.headers,
+            )
+
+        # Non-streaming
+        if tr:
+            try:
+                tr.on_request_end(outputs=result, error=None)
+            except Exception:
+                pass
+        return result
+
+    @app.get("/health")
     async def health():
-        """Health check endpoint."""
         return {"status": "healthy", "entrypoint": func.__name__}
 
-    # Automatically inject 'app' into the module where this function is defined
+    # Expose app in caller’s module for `uvicorn main:app`
     import sys
 
-    frame = sys._getframe(1)  # Get the calling frame (where @entrypoint was used)
-    module_globals = frame.f_globals
-    module_globals["app"] = fastapi_app
-
-    # Return the original function (so the user can still call it if needed)
+    sys._getframe(1).f_globals["app"] = app
     return func
 
 
 def run_server(app: FastAPI, host: str = "0.0.0.0", port: int = 8080, **kwargs):
-    """
-    Run a FastAPI server.
-
-    Args:
-        app: The FastAPI app to run
-        host: Host to bind to
-        port: Port to bind to
-        **kwargs: Additional arguments to pass to uvicorn.run()
-    """
     uvicorn.run(app, host=host, port=port, **kwargs)

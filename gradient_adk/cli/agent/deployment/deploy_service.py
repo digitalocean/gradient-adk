@@ -73,7 +73,7 @@ class AgentDeployService:
         source_dir: Path,
         project_id: str,
         api_token: str,
-    ) -> None:
+    ) -> str:
         """Deploy an agent to the platform.
 
         This orchestrates the full deployment workflow:
@@ -91,14 +91,15 @@ class AgentDeployService:
             project_id: DigitalOcean project ID
             api_token: DigitalOcean API token to include in .env
 
+        Returns:
+            agent_workspace_uuid: UUID of the deployed agent workspace
+
         Raises:
             ValueError: If source directory doesn't exist
             Exception: If deployment fails
         """
-        logger.info(
-            "Starting agent deployment",
-            workspace=agent_workspace_name,
-            deployment=agent_deployment_name,
+        print(
+            "Starting agent deployment...",
         )
 
         #: Check if workspace and deployment exist
@@ -128,36 +129,13 @@ class AgentDeployService:
             # Poll for deployment completion
             await self._poll_release_status(release_uuid)
 
-            logger.info(
-                "✅ Agent deployed successfully!",
-                workspace=agent_workspace_name,
-                deployment=agent_deployment_name,
-            )
-
             # Get Agent workspace info
             agent_workspace: GetAgentWorkspaceOutput = (
                 await self.client.get_agent_workspace(agent_workspace_name)
             )
 
-            # Prepare invocation instructions
             workspace_uuid = agent_workspace.agent_workspace.uuid
-
-            invoke_url = "https://agents.do-ai.run"
-            header_value = f"{workspace_uuid}/{agent_deployment_name}"
-
-            logger.info(
-                "To invoke your deployed agent, send a POST request to %s",
-                invoke_url,
-            )
-            logger.info(
-                "API requests must include the header: DO-Agent: %s",
-                header_value,
-            )
-            logger.info(
-                'Example:\n  curl -X POST %s -H "Content-Type: application/json" -H "DO-Agent: %s" -d \'{"input": "hello"}\'',
-                invoke_url,
-                header_value,
-            )
+            return workspace_uuid
 
         finally:
             # Cleanup zip file
@@ -176,7 +154,6 @@ class AgentDeployService:
         Returns:
             Tuple of (workspace_exists, deployment_exists)
         """
-        logger.info("Checking existing resources...")
 
         # Check if workspace exists
         workspaces_output = await self.client.list_agent_workspaces()
@@ -185,12 +162,12 @@ class AgentDeployService:
         )
 
         if not workspace_exists:
-            logger.info(
+            logger.debug(
                 f"Workspace '{agent_workspace_name}' does not exist - will create new"
             )
             return False, False
 
-        logger.info(f"Workspace '{agent_workspace_name}' exists")
+        logger.debug(f"Workspace '{agent_workspace_name}' exists")
 
         # Check if deployment exists
         try:
@@ -226,7 +203,7 @@ class AgentDeployService:
         Returns:
             Path to the created zip file
         """
-        logger.info(f"Creating deployment package from {source_dir}")
+        logger.debug(f"Creating deployment package from {source_dir}")
 
         # Ensure .env has DIGITALOCEAN_API_TOKEN
         env_file = source_dir / ".env"
@@ -322,7 +299,7 @@ class AgentDeployService:
         """
         if not workspace_exists:
             # Create new workspace (which includes first deployment)
-            logger.info(f"Creating new workspace '{agent_workspace_name}'...")
+            logger.debug(f"Creating new workspace '{agent_workspace_name}'...")
             workspace_input = CreateAgentWorkspaceInput(
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
@@ -348,7 +325,7 @@ class AgentDeployService:
 
         elif not deployment_exists:
             # Create new deployment in existing workspace
-            logger.info(f"Creating new deployment '{agent_deployment_name}'...")
+            logger.debug(f"Creating new deployment '{agent_deployment_name}'...")
             deployment_input = CreateAgentWorkspaceDeploymentInput(
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
@@ -365,7 +342,7 @@ class AgentDeployService:
 
         else:
             # Create new release for existing deployment
-            logger.info(f"Creating new release for existing deployment...")
+            logger.debug(f"Creating new release for existing deployment...")
             release_input = CreateAgentDeploymentReleaseInput(
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
@@ -388,7 +365,7 @@ class AgentDeployService:
         """
         import sys
 
-        logger.info(f"Monitoring deployment progress (UUID: {release_uuid})...")
+        print(f"Monitoring deployment progress (UUID: {release_uuid})...")
         print()  # Add blank line for better formatting
 
         start_time = time.time()

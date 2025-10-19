@@ -1,409 +1,277 @@
-"""
-Unit tests for the decorator module.
-"""
+import asyncio
+import inspect
+from contextlib import ExitStack
 
 import pytest
-import sys
-from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
-from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
-import json
 
+# ⬇️ Adjust this import path if your decorator lives elsewhere
 from gradient_adk.decorator import entrypoint, run_server
-from gradient_adk.streaming import StreamingResponse as GradientStreamingResponse
+import gradient_adk.decorator as entrypoint_mod
 
 
-class TestEntrypointDecorator:
-    """Test cases for the entrypoint decorator."""
-
-    def test_entrypoint_validates_function_parameters(self):
-        """Test that entrypoint validates function has exactly 2 parameters."""
-
-        # Test function with no parameters
-        with pytest.raises(
-            ValueError, match="must have exactly 2 parameters.*but has 0"
-        ):
-
-            @entrypoint
-            def no_params():
-                pass
-
-        # Test function with 1 parameter
-        with pytest.raises(
-            ValueError, match="must have exactly 2 parameters.*but has 1"
-        ):
-
-            @entrypoint
-            def one_param(data):
-                pass
-
-        # Test function with 3 parameters
-        with pytest.raises(
-            ValueError, match="must have exactly 2 parameters.*but has 3"
-        ):
-
-            @entrypoint
-            def three_params(data, context, extra):
-                pass
-
-    def test_entrypoint_accepts_valid_function(self):
-        """Test that entrypoint accepts function with exactly 2 parameters."""
-
-        @entrypoint
-        def valid_func(data, context):
-            return {"success": True}
-
-        # Should not raise any exception
-        assert callable(valid_func)
-
-    @patch("sys._getframe")
-    def test_entrypoint_injects_app_into_module(self, mock_getframe):
-        """Test that entrypoint injects FastAPI app into module globals."""
-
-        # Mock the frame and globals
-        mock_frame = Mock()
-        mock_globals = {}
-        mock_frame.f_globals = mock_globals
-        mock_getframe.return_value = mock_frame
-
-        @entrypoint
-        def test_func(data, context):
-            return {"test": True}
-
-        # Check that 'app' was injected into globals
-        assert "app" in mock_globals
-        assert isinstance(mock_globals["app"], FastAPI)
-        assert "test_func" in mock_globals["app"].title
-
-    @patch("sys._getframe")
-    def test_entrypoint_returns_original_function(self, mock_getframe):
-        """Test that entrypoint returns the original function."""
-
-        # Mock the frame
-        mock_frame = Mock()
-        mock_frame.f_globals = {}
-        mock_getframe.return_value = mock_frame
-
-        def original_func(data, context):
-            return {"original": True}
-
-        decorated_func = entrypoint(original_func)
-
-        # Should return the original function
-        assert decorated_func is original_func
-
-    @patch("sys._getframe")
-    def test_fastapi_app_configuration(self, mock_getframe):
-        """Test that FastAPI app is configured correctly."""
-
-        mock_frame = Mock()
-        mock_globals = {}
-        mock_frame.f_globals = mock_globals
-        mock_getframe.return_value = mock_frame
-
-        @entrypoint
-        def my_agent(data, context):
-            return {"message": "hello"}
-
-        app = mock_globals["app"]
-
-        # Check app configuration
-        assert "my_agent" in app.title
-        assert "Gradient ADK build agent" in app.description
-        assert app.version == "1.0.0"
+# ---------------------------
+# Shared fixtures & helpers
+# ---------------------------
 
 
-class TestFastAPIEndpoints:
-    """Test cases for the generated FastAPI endpoints."""
+@pytest.fixture(autouse=True)
+def patch_helpers(monkeypatch):
+    """
+    - Make capture_graph() a no-op (prevent side effects at import)
+    - Provide a controllable get_tracker()
+    """
+    # If the module already imported and ran capture_graph(), it's fine.
+    # We still patch get_tracker for the runtime calls.
+    tracker = TrackerDouble()
+    monkeypatch.setattr(entrypoint_mod, "get_tracker", lambda: tracker, raising=True)
+    monkeypatch.setattr(entrypoint_mod, "logger", LoggerDouble(), raising=True)
+    return tracker
 
-    def setup_method(self):
-        """Set up test fixtures before each test."""
-        self.mock_runtime_manager = Mock()
-        self.mock_context = Mock()
 
-        # Create a test app
-        with patch("sys._getframe") as mock_getframe:
-            mock_frame = Mock()
-            self.mock_globals = {}
-            mock_frame.f_globals = self.mock_globals
-            mock_getframe.return_value = mock_frame
+class TrackerDouble:
+    def __init__(self):
+        self.started = []
+        self.ended = []
+        self.closed = False
 
-            @entrypoint
-            def test_agent(data, context):
-                return {"echo": data}
+    def on_request_start(self, name, inputs):
+        self.started.append((name, inputs))
 
-            self.test_func = test_agent
-            self.app = self.mock_globals["app"]
-            self.client = TestClient(self.app)
+    def on_request_end(self, outputs=None, error=None):
+        self.ended.append((outputs, error))
 
-    @patch("gradient_adk.decorator.get_runtime_manager")
-    @patch("gradient_adk.decorator.get_current_context")
-    @pytest.mark.asyncio
-    async def test_completions_endpoint_success(
-        self, mock_get_context, mock_get_runtime_manager
-    ):
-        """Test successful request to /completions endpoint."""
+    async def aclose(self):
+        # Simulate async close
+        await asyncio.sleep(0)
+        self.closed = True
 
-        mock_get_runtime_manager.return_value = self.mock_runtime_manager
-        mock_get_context.return_value = self.mock_context
 
-        # Mock successful execution
-        expected_result = {"message": "success", "data": {"key": "value"}}
-        self.mock_runtime_manager.run_entrypoint = AsyncMock(
-            return_value=expected_result
+class LoggerDouble:
+    def __init__(self):
+        self.errors = []
+
+    def error(self, msg, **kwargs):
+        self.errors.append((msg, kwargs))
+
+
+def _make_streaming_response(entrypoint_mod, chunks, *, fail_after=None):
+    """
+    Build a GradientStreamingResponse using an async generator:
+    - chunks: iterable of string/bytes
+    - fail_after: if set, raise after yielding that many chunks
+    """
+    GradientStreamingResponse = entrypoint_mod.GradientStreamingResponse
+
+    async def gen():
+        for idx, ch in enumerate(chunks, start=1):
+            yield ch
+            if fail_after is not None and idx >= fail_after:
+                raise RuntimeError("stream-fail")
+
+    return GradientStreamingResponse(
+        content=gen(),  # async generator
+        media_type="text/event-stream",
+        headers={"X-Stream": "1"},
+    )
+
+
+# ----------------------------------
+# Unit tests for the entrypoint deco
+# ----------------------------------
+
+
+def test_rejects_functions_with_wrong_arity():
+    def bad(a):  # only 1 param
+        return a
+
+    with pytest.raises(ValueError) as ex:
+        entrypoint(bad)
+    assert "must accept exactly (data, context)" in str(ex.value)
+
+
+def test_health_endpoint_and_app_exposure(patch_helpers):
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        return {"ok": True}
+
+    # The decorator exposes `app` in the caller's module (this test file)
+    app = globals()["app"]
+    with TestClient(app) as client:
+        r = client.get("/health")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "healthy"
+        assert body["entrypoint"] == "handler"
+
+    # No tracker calls yet (only /health)
+    assert tracker.started == []
+    assert tracker.ended == []
+
+
+def test_run_endpoint_non_streaming_sync(patch_helpers):
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        assert context is None
+        return {"echo": data}
+
+    app = globals()["app"]
+    with TestClient(app) as client:
+        r = client.post("/run", json={"a": 1})
+        assert r.status_code == 200
+        assert r.json() == {"echo": {"a": 1}}
+
+    # Tracker observed start and end
+    assert tracker.started and tracker.started[-1][0] == "handler"
+    assert tracker.ended and tracker.ended[-1] == ({"echo": {"a": 1}}, None)
+
+
+@pytest.mark.asyncio
+async def test_run_endpoint_non_streaming_async(patch_helpers):
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data, context):
+        await asyncio.sleep(0)
+        return {"sum": data.get("x", 0) + data.get("y", 0)}
+
+    app = globals()["app"]
+    # TestClient drives the ASGI app in a thread; it's fine for async routes
+    with TestClient(app) as client:
+        r = client.post("/run", json={"x": 2, "y": 3})
+        assert r.status_code == 200
+        assert r.json() == {"sum": 5}
+
+    assert tracker.started and tracker.started[-1][0] == "handler"
+    assert tracker.ended and tracker.ended[-1] == ({"sum": 5}, None)
+
+
+def test_run_endpoint_invalid_json_returns_400(patch_helpers):
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        return {"ok": True}
+
+    app = globals()["app"]
+    with TestClient(app) as client:
+        # Send invalid JSON payload (string with wrong content-type)
+        r = client.post(
+            "/run", data="not-json", headers={"Content-Type": "application/json"}
+        )
+        assert r.status_code == 400
+        # No on_request_start should be called (it happens after JSON parse)
+        assert tracker.started == []
+        assert tracker.ended == []
+
+
+def test_run_endpoint_handler_error_returns_500_and_tracks_error(patch_helpers):
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        raise RuntimeError("boom")
+
+    app = globals()["app"]
+    with TestClient(app) as client:
+        r = client.post("/run", json={"a": 1})
+        assert r.status_code == 500
+        assert r.json()["detail"] == "Internal server error"
+
+    # started then ended with error
+    assert tracker.started and tracker.started[-1][0] == "handler"
+    assert tracker.ended and tracker.ended[-1][0] is None
+    assert tracker.ended[-1][1]  # error message present
+
+
+def test_run_endpoint_streaming_success_calls_end_with_none(patch_helpers):
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        return _make_streaming_response(entrypoint_mod, chunks=[b"a", b"b", b"c"])
+
+    app = globals()["app"]
+    with TestClient(app) as client:
+        with client.stream("POST", "/run", json={"p": 1}) as resp:
+            assert resp.status_code == 200
+            # Read the full stream
+            body = b"".join(resp.iter_bytes())
+            assert body == b"abc"  # chunks concatenated
+
+    # For streaming success, outputs=None, error=None at end
+    assert tracker.started and tracker.started[-1][0] == "handler"
+    assert tracker.ended and tracker.ended[-1] == (None, None)
+
+
+def test_run_endpoint_streaming_error_calls_end_with_error(patch_helpers):
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        # Fail after first chunk
+        return _make_streaming_response(
+            entrypoint_mod, chunks=[b"1", b"2"], fail_after=1
         )
 
-        # Make request
-        response = self.client.post("/completions", json={"key": "value"})
+    app = globals()["app"]
+    with TestClient(app) as client:
+        # Streaming exceptions propagate as connection errors inside TestClient iteration.
+        with pytest.raises(Exception):
+            with client.stream("POST", "/run", json={"p": 1}) as resp:
+                assert resp.status_code == 200
+                # iterating triggers the generator exception
+                for _ in resp.iter_bytes():
+                    pass
 
-        # Assertions
-        assert response.status_code == 200
-        assert response.json() == expected_result
-
-        # Verify runtime manager was called correctly
-        self.mock_runtime_manager.run_entrypoint.assert_called_once_with(
-            self.test_func, {"key": "value"}, self.mock_context
-        )
-
-    @patch("gradient_adk.decorator.get_runtime_manager")
-    @patch("gradient_adk.decorator.get_current_context")
-    def test_completions_endpoint_invalid_json(
-        self, mock_get_context, mock_get_runtime_manager
-    ):
-        """Test /completions endpoint with invalid JSON."""
-
-        mock_get_runtime_manager.return_value = self.mock_runtime_manager
-        mock_get_context.return_value = self.mock_context
-
-        # Make request with invalid JSON
-        response = self.client.post(
-            "/completions",
-            content="invalid json",  # Use content instead of data
-            headers={"Content-Type": "application/json"},
-        )
-
-        # Due to the error handling in the decorator, this will be 500
-        # The decorator catches the HTTPException and logs it, then returns 500
-        assert response.status_code == 500
-        assert response.json()["detail"] == "Internal server error"
-
-    @patch("gradient_adk.decorator.get_runtime_manager")
-    @patch("gradient_adk.decorator.get_current_context")
-    @pytest.mark.asyncio
-    async def test_completions_endpoint_runtime_error(
-        self, mock_get_context, mock_get_runtime_manager
-    ):
-        """Test /completions endpoint when runtime manager raises exception."""
-
-        mock_get_runtime_manager.return_value = self.mock_runtime_manager
-        mock_get_context.return_value = self.mock_context
-
-        # Mock runtime manager to raise exception
-        self.mock_runtime_manager.run_entrypoint = AsyncMock(
-            side_effect=Exception("Runtime error")
-        )
-
-        # Make request
-        response = self.client.post("/completions", json={"test": "data"})
-
-        # Should return 500 error
-        assert response.status_code == 500
-        assert response.json()["detail"] == "Internal server error"
-
-    @patch("gradient_adk.decorator.get_runtime_manager")
-    @patch("gradient_adk.decorator.get_current_context")
-    @pytest.mark.asyncio
-    async def test_completions_endpoint_streaming_response(
-        self, mock_get_context, mock_get_runtime_manager
-    ):
-        """Test /completions endpoint with streaming response."""
-
-        mock_get_runtime_manager.return_value = self.mock_runtime_manager
-        mock_get_context.return_value = self.mock_context
-
-        # Create mock streaming response
-        async def mock_content():
-            yield b"chunk1"
-            yield b"chunk2"
-
-        mock_streaming_response = GradientStreamingResponse(
-            content=mock_content(),
-            media_type="text/plain",
-            headers={"X-Custom": "header"},
-        )
-
-        self.mock_runtime_manager.run_entrypoint = AsyncMock(
-            return_value=mock_streaming_response
-        )
-
-        # Make request
-        response = self.client.post("/completions", json={"stream": True})
-
-        # Should return streaming response
-        assert response.status_code == 200
-        assert response.headers["content-type"] == "text/plain; charset=utf-8"
-        assert response.headers["X-Custom"] == "header"
-
-    def test_health_endpoint(self):
-        """Test the /health endpoint."""
-
-        response = self.client.get("/health")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["status"] == "healthy"
-        assert data["entrypoint"] == "test_agent"
+    # Tracker should have been ended with an error
+    assert tracker.started and tracker.started[-1][0] == "handler"
+    assert tracker.ended and tracker.ended[-1][0] is None
+    assert tracker.ended[-1][1]  # error string
 
 
-class TestRunServer:
-    """Test cases for the run_server function."""
+def test_shutdown_event_calls_tracker_aclose(patch_helpers):
+    tracker = patch_helpers
 
-    @patch("gradient_adk.decorator.uvicorn.run")
-    def test_run_server_default_params(self, mock_uvicorn_run):
-        """Test run_server with default parameters."""
+    @entrypoint
+    def handler(data, context):
+        return {"ok": True}
 
-        mock_app = Mock(spec=FastAPI)
-
-        run_server(mock_app)
-
-        mock_uvicorn_run.assert_called_once_with(mock_app, host="0.0.0.0", port=8080)
-
-    @patch("gradient_adk.decorator.uvicorn.run")
-    def test_run_server_custom_params(self, mock_uvicorn_run):
-        """Test run_server with custom parameters."""
-
-        mock_app = Mock(spec=FastAPI)
-
-        run_server(mock_app, host="127.0.0.1", port=3000, reload=True, debug=True)
-
-        mock_uvicorn_run.assert_called_once_with(
-            mock_app, host="127.0.0.1", port=3000, reload=True, debug=True
-        )
+    app = globals()["app"]
+    # TestClient triggers startup/shutdown events when used as a context manager
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
+    # After context exit, shutdown event should have run
+    assert tracker.closed is True
 
 
-class TestIntegration:
-    """Integration tests for the decorator functionality."""
+def test_run_server_invokes_uvicorn(monkeypatch):
+    calls = {}
 
-    @patch("gradient_adk.decorator.get_runtime_manager")
-    @patch("gradient_adk.decorator.get_current_context")
-    def test_full_decorator_workflow(self, mock_get_context, mock_get_runtime_manager):
-        """Test complete workflow from decoration to endpoint call."""
+    def fake_run(app, host, port, **kwargs):
+        calls["app"] = app
+        calls["host"] = host
+        calls["port"] = port
+        calls["kwargs"] = kwargs
 
-        mock_runtime_manager = Mock()
-        mock_context = Mock()
-        mock_get_runtime_manager.return_value = mock_runtime_manager
-        mock_get_context.return_value = mock_context
+    monkeypatch.setattr(entrypoint_mod.uvicorn, "run", fake_run, raising=True)
 
-        # Create a real module globals dict by using the test module's globals
-        # This avoids the complex mocking of sys._getframe
-        test_globals = {}
+    # Build a tiny app via the decorator to pass into run_server
+    @entrypoint
+    def handler(data, context):
+        return {"ok": True}
 
-        with patch("sys._getframe") as mock_getframe:
-            mock_frame = Mock()
-            mock_frame.f_globals = test_globals
-            mock_getframe.return_value = mock_frame
+    app = globals()["app"]
 
-            @entrypoint
-            def integration_agent(data, context):
-                return {"processed": data, "context_id": context.id}
+    # Call run_server with custom args and ensure uvicorn.run is invoked accordingly
+    run_server(app, host="127.0.0.1", port=9999, reload=True, log_level="debug")
 
-        # Mock runtime execution
-        expected_result = {"processed": {"input": "test"}, "context_id": "ctx-123"}
-        mock_runtime_manager.run_entrypoint = AsyncMock(return_value=expected_result)
-        mock_context.id = "ctx-123"
-
-        # Test the generated app
-        app = test_globals["app"]
-
-        # Use a simpler client setup to avoid logging issues
-        with TestClient(app) as client:
-            # Make request
-            response = client.post("/completions", json={"input": "test"})
-
-        # Verify response
-        assert response.status_code == 200
-        assert response.json() == expected_result
-
-        # Verify runtime manager was called
-        mock_runtime_manager.run_entrypoint.assert_called_once_with(
-            integration_agent, {"input": "test"}, mock_context
-        )
-
-    @patch("sys._getframe")
-    def test_multiple_decorated_functions(self, mock_getframe):
-        """Test that multiple functions can be decorated independently."""
-
-        # Setup different mock globals for each function
-        mock_frame1 = Mock()
-        mock_globals1 = {}
-        mock_frame1.f_globals = mock_globals1
-
-        mock_frame2 = Mock()
-        mock_globals2 = {}
-        mock_frame2.f_globals = mock_globals2
-
-        mock_getframe.side_effect = [mock_frame1, mock_frame2]
-
-        @entrypoint
-        def agent1(data, context):
-            return {"agent": "1"}
-
-        @entrypoint
-        def agent2(data, context):
-            return {"agent": "2"}
-
-        # Both should have their own apps
-        assert "app" in mock_globals1
-        assert "app" in mock_globals2
-        assert mock_globals1["app"] is not mock_globals2["app"]
-
-        # Apps should have different titles
-        assert "agent1" in mock_globals1["app"].title
-        assert "agent2" in mock_globals2["app"].title
-
-
-class TestErrorHandling:
-    """Test cases for error handling scenarios."""
-
-    def setup_method(self):
-        """Set up test fixtures."""
-        with patch("sys._getframe") as mock_getframe:
-            mock_frame = Mock()
-            mock_globals = {}
-            mock_frame.f_globals = mock_globals
-            mock_getframe.return_value = mock_frame
-
-            @entrypoint
-            def error_test_agent(data, context):
-                return {"test": True}
-
-            self.app = mock_globals["app"]
-            self.client = TestClient(self.app)
-
-    @patch("gradient_adk.decorator.get_runtime_manager")
-    @patch("gradient_adk.decorator.get_current_context")
-    @patch("gradient_adk.decorator.logger")
-    def test_exception_logging(
-        self, mock_logger, mock_get_context, mock_get_runtime_manager
-    ):
-        """Test that exceptions are properly logged."""
-
-        mock_runtime_manager = Mock()
-        mock_get_runtime_manager.return_value = mock_runtime_manager
-        mock_get_context.return_value = Mock()
-
-        # Mock runtime manager to raise exception
-        test_exception = Exception("Test error")
-        mock_runtime_manager.run_entrypoint = AsyncMock(side_effect=test_exception)
-
-        # Make request
-        response = self.client.post("/completions", json={"test": "data"})
-
-        # Verify error response
-        assert response.status_code == 500
-
-        # Verify logging was called
-        mock_logger.error.assert_called_once_with(
-            "Error in entrypoint", error="Test error", exc_info=True
-        )
+    assert calls["app"] is app
+    assert calls["host"] == "127.0.0.1"
+    assert calls["port"] == 9999
+    assert calls["kwargs"]["reload"] is True
+    assert calls["kwargs"]["log_level"] == "debug"

@@ -8,8 +8,6 @@ import os, time, json
 from gradient import AsyncGradient
 from gradient_adk import entrypoint
 
-from gradient_adk.langgraph import attach_graph
-
 
 @tool
 def current_time() -> int:
@@ -117,7 +115,6 @@ graph.add_edge("tools", "agent")
 graph.set_entry_point("agent")
 graph.set_finish_point("agent")
 
-attach_graph(graph)
 workflow = graph.compile()
 
 
@@ -125,5 +122,5 @@ workflow = graph.compile()
 async def entry(data, context):
     query = data["query"]
     inputs = {"messages": [HumanMessage(content=query)]}
-    result = workflow.ainvoke(inputs)
+    result = await workflow.ainvoke(inputs)
     return result
