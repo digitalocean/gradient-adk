@@ -49,8 +49,8 @@ _MAX_ITEMS = 100  # keep payloads bounded
 
 def _freeze(obj: Any, depth: int = _MAX_DEPTH) -> Any:
     """Mutation-safe, JSON-ish snapshot for arbitrary Python objects."""
-    if depth < 0:
-        return "<max-depth>"
+    # if depth < 0:
+    #     return "<max-depth>"
     if obj is None or isinstance(obj, (str, int, float, bool)):
         return obj
 
@@ -109,8 +109,8 @@ def _snapshot_args_kwargs(a: Tuple[Any, ...], kw: Dict[str, Any]) -> dict:
 
 def _diff(a: Any, b: Any, depth: int = 2) -> Any:
     """Small, generic diff for dicts/lists/tuples; returns None if identical."""
-    if depth < 0:
-        return "<max-depth>"
+    # if depth < 0:
+    #     return "<max-depth>"
 
     # dict diff
     if isinstance(a, dict) and isinstance(b, dict):
@@ -162,11 +162,6 @@ def _diff(a: Any, b: Any, depth: int = 2) -> Any:
         return out_list if changed else None
 
     return None if a == b else {"before": a, "after": b}
-
-
-# --------------------------------------------------------------------------
-# Output shaping (single, compact canonical output)
-# --------------------------------------------------------------------------
 
 
 def _first_arg_after(a: Tuple[Any, ...]) -> Optional[Any]:
@@ -223,7 +218,7 @@ def _had_hits_since(intr, token) -> bool:
 
 
 class LangGraphInstrumentor:
-    """Wraps LangGraph nodes (any callable/runnable shape) with tracing."""
+    """Wraps LangGraph nodes with tracing."""
 
     def __init__(self) -> None:
         self._installed = False
@@ -235,10 +230,7 @@ class LangGraphInstrumentor:
         self._tracker = tracker
 
         original_add_node = StateGraph.add_node
-        original_compile = StateGraph.compile
         t = tracker  # close over
-
-        # ---- Shared start/finish routines to avoid duplication ----
 
         def _start(node_name: str, a: Tuple[Any, ...], kw: Dict[str, Any]):
             inputs_snapshot = _snapshot_args_kwargs(a, kw)
@@ -260,25 +252,6 @@ class LangGraphInstrumentor:
             if _had_hits_since(intr, tok):
                 _ensure_meta(rec)["is_llm_call"] = True
             t.on_node_end(rec, out_payload)
-
-        def _finish_streamed(
-            rec: NodeExecution,
-            inputs_snapshot: dict,
-            a: Tuple[Any, ...],
-            kw: Dict[str, Any],
-            intr,
-            tok,
-        ):
-            # When streaming, we might not have a materialized return.
-            # Prefer mutated first arg if present; else mark as streamed.
-            arg0_after = _first_arg_after(a)
-            if isinstance(arg0_after, dict):
-                payload = _freeze(arg0_after)
-            else:
-                payload = {"streamed": True}
-            if _had_hits_since(intr, tok):
-                _ensure_meta(rec)["is_llm_call"] = True
-            t.on_node_end(rec, payload)
 
         def _finish_err(rec: NodeExecution, intr, tok, e: BaseException):
             if _had_hits_since(intr, tok):
@@ -320,11 +293,27 @@ class LangGraphInstrumentor:
             async def _wrapped(*a, **kw):
                 rec, snap, intr, tok = _start(node_name, a, kw)
                 try:
+                    # Accumulate a compact, canonical final payload
+                    # (string: concatenate; list: extend; else: last write wins)
+                    acc: Dict[str, Any] = {}
+
                     async for chunk in func(*a, **kw):
-                        # Stream chunks as-is but frozen for safety
-                        t.on_node_chunk(rec, _freeze(chunk))
+                        # Merge into acc for the final on_node_end payload
+                        for k, v in chunk.items():
+                            if isinstance(v, str):
+                                acc[k] = acc.get(k, "") + v
+                            elif isinstance(v, bytes):
+                                acc[k] = acc.get(k, b"") + v
+                            elif isinstance(v, list):
+                                acc.setdefault(k, []).extend(v)
+                            else:
+                                acc[k] = v
+
+                        # Pass the live chunk downstream unchanged
                         yield chunk
-                    _finish_streamed(rec, snap, a, kw, intr, tok)
+
+                    # Finish the span with the aggregated mapping
+                    _finish_ok(rec, snap, a, kw, acc, intr, tok)
                 except BaseException as e:
                     _finish_err(rec, intr, tok, e)
                     raise
@@ -360,8 +349,6 @@ class LangGraphInstrumentor:
             setattr(_wrapped, WRAPPED_FLAG, True)
             return _wrapped
 
-        # ---- Dispatcher ----
-
         def wrap_callable(node_name: str, func: Any):
             if getattr(func, WRAPPED_FLAG, False):
                 return func
@@ -380,7 +367,7 @@ class LangGraphInstrumentor:
             if inspect.isfunction(func):
                 return _wrap_sync_func(node_name, func)
 
-            # Unknown type -> leave untouched (compile hook can still retro-wrap)
+            # Unknown type -> leave untouched
             return func
 
         def wrapped_add_node(graph_self, name, func, *args, **kwargs):

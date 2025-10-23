@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Mapping
-from typing import Any, Dict, List, Optional
+import inspect
+from typing import Any, Callable, Dict, List, Optional
 
 from gradient_adk.digital_ocean_api import (
     AsyncDigitalOceanGenAI,
@@ -14,7 +15,7 @@ from gradient_adk.digital_ocean_api import (
 from .interfaces import NodeExecution
 
 from datetime import datetime, timezone
-from gradient_adk.streaming import StreamingResponse
+from gradient_adk.streaming import StreamingResponse, ServerSentEventsResponse
 
 
 def _utc(dt: datetime | None = None) -> datetime:
@@ -42,44 +43,61 @@ class DigitalOceanTracesTracker:
         self._done: List[NodeExecution] = []
         self._inflight: set[asyncio.Task] = set()
 
-    # ---- request ----
     def on_request_start(self, entrypoint: str, inputs: Dict[str, Any]) -> None:
         # NEW: reset buffers per request
         self._live.clear()
         self._done.clear()
         self._req = {"entrypoint": entrypoint, "inputs": inputs}
 
+    def _as_async_iterable_and_setter(
+        self, resp
+    ) -> Optional[tuple[object, Callable[[object], None]]]:
+        """
+        If `resp` looks like a streaming response that iterates over `resp.content`,
+        return (orig_iterable, setter) so we can replace it. Else None.
+        """
+        content = getattr(resp, "content", None)
+        if content is None:
+            return None
+        # async iterator / async generator objects
+        if hasattr(content, "__aiter__") or inspect.isasyncgen(content):
+
+            def _setter(new_iterable):
+                resp.content = new_iterable
+
+            return content, _setter
+        return None
+
     def on_request_end(self, outputs: Any | None, error: Optional[str]) -> None:
-        if isinstance(outputs, StreamingResponse):
-            self._req["error"] = error
-            self._req["outputs"] = None
+        # Common fields
+        self._req["error"] = error
 
-            original_content = outputs.content
-            collected: list[str] = []
+        # Streaming path
+        wrapped = self._as_async_iterable_and_setter(outputs)
+        if wrapped is not None:
+            orig_iterable, set_iterable = wrapped
+            self._req["outputs"] = None  # will be filled after streaming finishes
 
-            # Patch the __aiter__ method so the collector runs *after* the server has sent all chunks
-            async def new_aiter():
-                async for chunk in original_content:
-                    # collect text safely
+            async def collecting_iter():
+                collected: list[str] = []
+                async for chunk in orig_iterable:
+                    # collect safely (bytes/str/other)
                     if isinstance(chunk, (bytes, bytearray)):
-                        collected.append(chunk.decode("utf-8"))
+                        collected.append(chunk.decode("utf-8", errors="replace"))
                     elif isinstance(chunk, str):
                         collected.append(chunk)
                     else:
                         collected.append(str(chunk))
                     yield chunk
-                # when Starlette finishes sending
+                # when the server finishes sending
                 self._req["outputs"] = "".join(collected)
                 await self._submit()
 
-            # Replace the async iterator interface
-            outputs.content.__aiter__ = new_aiter
-            return
+            set_iterable(collecting_iter())
+            return  # important: don't submit yet
 
-        # --- normal non-streaming path ---
+        # Non-streaming
         self._req["outputs"] = outputs
-        self._req["error"] = error
-
         try:
             loop = asyncio.get_running_loop()
             task = loop.create_task(self._submit())
@@ -96,7 +114,6 @@ class DigitalOceanTracesTracker:
         except RuntimeError:
             asyncio.run(self._submit())
 
-    # ---- nodes ----
     def on_node_start(self, node: NodeExecution) -> None:
         self._live[node.node_id] = node
 
@@ -112,17 +129,12 @@ class DigitalOceanTracesTracker:
         live.error = str(error)
         self._done.append(live)
 
-    def on_node_chunk(self, node: NodeExecution, chunk: Any) -> None:
-        # Optional: add as events/child spans later. No-op for now.
-        pass
-
     async def aclose(self) -> None:
         if self._inflight:
             await asyncio.gather(*list(self._inflight), return_exceptions=True)
             self._inflight.clear()
         await self._client.aclose()
 
-    # ---- submit ----
     async def _submit(self) -> None:
         try:
             trace = self._build_trace()
@@ -134,14 +146,14 @@ class DigitalOceanTracesTracker:
             await self._client.create_traces(req)
         except Exception as e:
             # never break user code on export errors
-            print(e)
+            pass
 
     def _to_span(self, ex: NodeExecution) -> Span:
         # Base payloads
         inp = ex.inputs if isinstance(ex.inputs, dict) else {"input": ex.inputs}
         out = ex.outputs if isinstance(ex.outputs, dict) else {"output": ex.outputs}
 
-        # NEW: include error (if any) and matched endpoints (if present)
+        # include error (if any) and matched endpoints (if present)
         if ex.error is not None:
             out = dict(out)
             out["error"] = ex.error
@@ -149,7 +161,7 @@ class DigitalOceanTracesTracker:
             out = dict(out)
             out["_llm_endpoints"] = list(ex.metadata["llm_endpoints"])
 
-        # NEW: classify LLM/tool via metadata set by the instrumentor
+        # classify LLM/tool via metadata set by the instrumentor
         span_type = (
             TraceSpanType.TRACE_SPAN_TYPE_LLM
             if (ex.metadata or {}).get("is_llm_call")
@@ -182,7 +194,6 @@ class DigitalOceanTracesTracker:
         created_at = min((s.created_at for s in spans), default=_utc())
         name = str(self._req.get("entrypoint", "request"))
 
-        # NEW: coerce to dicts so pydantic is happy even if agent returns a string/number/etc.
         inputs = self._coerce_top(self._req.get("inputs"), "input")
         outputs = self._coerce_top(self._req.get("outputs"), "output")
 
@@ -198,6 +209,4 @@ class DigitalOceanTracesTracker:
             output=outputs,
             spans=spans,
         )
-        # optional debug
-        # print(trace)
         return trace

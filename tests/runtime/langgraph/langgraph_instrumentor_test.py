@@ -19,7 +19,6 @@ def tracker():
     t.on_node_start = MagicMock()
     t.on_node_end = MagicMock()
     t.on_node_error = MagicMock()
-    t.on_node_chunk = MagicMock()
     return t
 
 

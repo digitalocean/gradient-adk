@@ -21,7 +21,7 @@ def get_do_api_token(
 
     Args:
         token_override: Optional token provided via CLI argument
-        env_var_name: Name of environment variable to check (default: DO_API_TOKEN)
+        env_var_name: Name of environment variable to check (default: DIGITALOCEAN_API_TOKEN)
         required: Whether the token is required (raises error if missing)
 
     Returns:
@@ -81,7 +81,7 @@ def validate_api_token(token: str) -> str:
     return token
 
 
-def prompt_for_missing_token(env_var_name: str = "DO_API_TOKEN") -> str:
+def prompt_for_missing_token(env_var_name: str = "DIGITALOCEAN_API_TOKEN") -> str:
     """
     Interactively prompt for API token if missing.
 

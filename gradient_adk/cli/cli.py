@@ -169,7 +169,9 @@ def agent_init(
 
     typer.echo("\n🚀 Next steps:")
     typer.echo("   1. Edit main.py to implement your agent logic")
-    typer.echo("   2. Add custom tools to the tools/ folder")
+    typer.echo(
+        "   2. Update your .env file with your GRADIENT_MODEL_ACCESS_KEY (https://cloud.digitalocean.com/gen-ai/model-access-keys)"
+    )
     typer.echo("   3. Run 'gradient agent run' to test locally")
     typer.echo("   4. Use 'gradient agent deploy' when ready to deploy")
 
@@ -240,8 +242,8 @@ def agent_deploy(
     api_token: Optional[str] = typer.Option(
         None,
         "--api-token",
-        help="DigitalOcean API token (overrides DO_API_TOKEN env var)",
-        envvar="DO_API_TOKEN",
+        help="DigitalOcean API token (overrides DIGITALOCEAN_API_TOKEN env var)",
+        envvar="DIGITALOCEAN_API_TOKEN",
         hide_input=True,
     )
 ):
@@ -284,17 +286,13 @@ def agent_deploy(
                 typer.echo(
                     f"Agent deployed successfully! ({agent_workspace_name}/{agent_deployment_name})"
                 )
-                invoke_url = "https://agents.do-ai.run"
-                header_value = f"{workspace_uuid}/{agent_deployment_name}"
+                invoke_url = f"https://agents.do-ai.run/{workspace_uuid}/{agent_deployment_name}/run"
 
                 typer.echo(
-                    f"To invoke your deployed agent, send a POST request to {invoke_url}"
-                )
-                typer.echo(
-                    f"API requests must include the header: DO-Agent: {header_value}"
+                    f"To invoke your deployed agent, send a POST request to {invoke_url} with your properly formatted payload."
                 )
                 example_cmd = f"""Example:
-  curl -X POST {invoke_url} -H "Content-Type: application/json" -H "DO-Agent: {header_value}" -d '{{"input": "hello"}}' """
+  curl -X POST {invoke_url} -d '{{"prompt": "hello"}}' """
                 typer.echo(example_cmd)
 
         asyncio.run(deploy())
@@ -302,10 +300,14 @@ def agent_deploy(
     except EnvironmentError as e:
         typer.echo(f"❌ {e}", err=True)
         typer.echo("\nTo set your token:", err=True)
-        typer.echo("  export DO_API_TOKEN=your_token_here", err=True)
+        typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
     except Exception as e:
         typer.echo(f"❌ Deployment failed: {e}", err=True)
+        typer.echo(
+            f"Ensure that your agent can start up successfully with the correct environment variables prior to deploying.",
+            err=True,
+        )
         raise typer.Exit(1)
 
 
@@ -314,8 +316,8 @@ def agent_traces(
     api_token: Optional[str] = typer.Option(
         None,
         "--api-token",
-        help="DigitalOcean API token (overrides DO_API_TOKEN env var)",
-        envvar="DO_API_TOKEN",
+        help="DigitalOcean API token (overrides DIGITALOCEAN_API_TOKEN env var)",
+        envvar="DIGITALOCEAN_API_TOKEN",
         hide_input=True,
     )
 ):
@@ -353,7 +355,7 @@ def agent_traces(
     except EnvironmentError as e:
         typer.echo(f"❌ {e}", err=True)
         typer.echo("\nTo set your token permanently:", err=True)
-        typer.echo("  export DO_API_TOKEN=your_token_here", err=True)
+        typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
     except Exception as e:
         typer.echo(f"❌ Failed to open traces UI: {e}", err=True)
@@ -365,8 +367,8 @@ def agent_logs(
     api_token: Optional[str] = typer.Option(
         None,
         "--api-token",
-        help="DigitalOcean API token (overrides DO_API_TOKEN env var)",
-        envvar="DO_API_TOKEN",
+        help="DigitalOcean API token (overrides DIGITALOCEAN_API_TOKEN env var)",
+        envvar="DIGITALOCEAN_API_TOKEN",
         hide_input=True,
     )
 ):
@@ -399,7 +401,7 @@ def agent_logs(
     except EnvironmentError as e:
         typer.echo(f"❌ {e}", err=True)
         typer.echo("\nTo set your token:", err=True)
-        typer.echo("  export DO_API_TOKEN=your_token_here", err=True)
+        typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
     except Exception as e:
         typer.echo(f"❌ Failed to fetch logs: {e}", err=True)

@@ -210,7 +210,9 @@ class GalileoTracesService:
         )
 
         if workspace is None:
-            raise ValueError(f"Agent workspace '{agent_workspace_name}' not found")
+            raise ValueError(
+                f"Agent workspace '{agent_workspace_name}' not deployed. Please run 'gradient agent deploy'."
+            )
 
         workspace_uuid = workspace.uuid
         logger.info(

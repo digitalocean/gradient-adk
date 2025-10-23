@@ -92,7 +92,7 @@ class AsyncDigitalOceanGenAI:
 
     async def create_traces(self, req: CreateTracesInput) -> EmptyResponse:
         body = self._model_dump(req)
-        logger.info("Creating traces", request_body=body)
+        logger.debug("Creating traces", request_body=body)
         data = await self._post_json("/gen-ai/traces", body)
         # Always return empty response until create_traces starts returning data
         if not data:
