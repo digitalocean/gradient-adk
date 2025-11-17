@@ -51,10 +51,17 @@ class YamlAgentConfigManager(AgentConfigManager):
         """Configure agent settings and save to YAML file."""
         if interactive:
             if agent_name is None:
-                agent_name = typer.prompt("Agent name")
+                agent_name = self._prompt_with_validation(
+                    "Agent name",
+                    self._validate_name,
+                    "Agent name can only contain alphanumeric characters, hyphens, and underscores",
+                )
             if agent_environment is None:
-                agent_environment = typer.prompt(
-                    "Agent deployment name", default="main"
+                agent_environment = self._prompt_with_validation(
+                    "Agent deployment name",
+                    self._validate_name,
+                    "Deployment name can only contain alphanumeric characters, hyphens, and underscores",
+                    default="main",
                 )
             if entrypoint_file is None:
                 entrypoint_file = typer.prompt(
@@ -68,8 +75,52 @@ class YamlAgentConfigManager(AgentConfigManager):
                 )
                 raise typer.Exit(2)
 
+            # Validate names in non-interactive mode
+            if not self._validate_name(agent_name):
+                typer.echo(
+                    f"Error: Agent name '{agent_name}' is invalid. "
+                    "It can only contain alphanumeric characters, hyphens, and underscores.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
+            if not self._validate_name(agent_environment):
+                typer.echo(
+                    f"Error: Deployment name '{agent_environment}' is invalid. "
+                    "It can only contain alphanumeric characters, hyphens, and underscores.",
+                    err=True,
+                )
+                raise typer.Exit(1)
+
         self._validate_entrypoint_file(entrypoint_file)
         self._save_config(agent_name, agent_environment, entrypoint_file)
+
+    def _validate_name(self, name: str) -> bool:
+        """Validate that a name only contains alphanumeric characters, hyphens, and underscores."""
+        if not name:
+            return False
+        return bool(re.match(r"^[a-zA-Z0-9_-]+$", name))
+
+    def _prompt_with_validation(
+        self,
+        prompt_text: str,
+        validator: callable,
+        error_message: str,
+        default: Optional[str] = None,
+    ) -> str:
+        """Prompt user for input with validation, re-prompting on invalid input."""
+        while True:
+            if default:
+                value = typer.prompt(prompt_text, default=default)
+            else:
+                value = typer.prompt(prompt_text)
+
+            if validator(value):
+                return value
+            else:
+                typer.echo(f"❌ {error_message}", err=True)
+                typer.echo(f"   You entered: '{value}'", err=True)
+                typer.echo("   Please try again.\n", err=True)
 
     def _validate_entrypoint_file(self, entrypoint_file: str) -> None:
         """Validate that the entrypoint file exists and contains @entrypoint decorator."""

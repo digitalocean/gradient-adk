@@ -108,11 +108,12 @@ class AgentDeployService:
         )
 
         # Create zip archive (this will handle .env setup)
-        zip_path = await self._create_deployment_zip(
-            source_dir, agent_deployment_name, api_token
-        )
-
+        zip_path = None
         try:
+            zip_path = await self._create_deployment_zip(
+                source_dir, agent_deployment_name, api_token
+            )
+
             # Get presigned URL and upload
             code_artifact = await self._upload_code_artifact(zip_path)
 
@@ -138,9 +139,13 @@ class AgentDeployService:
             return workspace_uuid
 
         finally:
-            # Cleanup zip file
-            if zip_path.exists():
-                zip_path.unlink()
+            # Cleanup zip file if it was created
+            if zip_path and zip_path.exists():
+                try:
+                    zip_path.unlink()
+                    logger.debug(f"Cleaned up zip file: {zip_path}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup zip file {zip_path}: {e}")
 
     async def _check_existing_resources(
         self, agent_workspace_name: str, agent_deployment_name: str
@@ -205,34 +210,48 @@ class AgentDeployService:
         """
         logger.debug(f"Creating deployment package from {source_dir}")
 
+        # Validate source directory
+        if not source_dir.exists():
+            raise ValueError(f"Source directory does not exist: {source_dir}")
+
+        if not source_dir.is_dir():
+            raise ValueError(f"Source path is not a directory: {source_dir}")
+
         # Ensure .env has DIGITALOCEAN_API_TOKEN
         env_file = source_dir / ".env"
         env_token_line = f"DIGITALOCEAN_API_TOKEN={api_token}\n"
 
-        if env_file.exists():
-            # Read existing .env
-            env_content = env_file.read_text()
+        try:
+            if env_file.exists():
+                # Read existing .env
+                env_content = env_file.read_text()
 
-            # Check if DIGITALOCEAN_API_TOKEN is already set
-            if "DIGITALOCEAN_API_TOKEN=" not in env_content:
-                # Append to existing file
-                logger.debug("Adding DIGITALOCEAN_API_TOKEN to existing .env file")
-                with env_file.open("a") as f:
-                    # Ensure there's a newline before our addition if file doesn't end with one
-                    if env_content and not env_content.endswith("\n"):
-                        f.write("\n")
-                    f.write(env_token_line)
+                # Check if DIGITALOCEAN_API_TOKEN is already set
+                if "DIGITALOCEAN_API_TOKEN=" not in env_content:
+                    # Append to existing file
+                    logger.debug("Adding DIGITALOCEAN_API_TOKEN to existing .env file")
+                    with env_file.open("a") as f:
+                        # Ensure there's a newline before our addition if file doesn't end with one
+                        if env_content and not env_content.endswith("\n"):
+                            f.write("\n")
+                        f.write(env_token_line)
+                else:
+                    logger.debug("DIGITALOCEAN_API_TOKEN already exists in .env file")
             else:
-                logger.debug("DIGITALOCEAN_API_TOKEN already exists in .env file")
-        else:
-            # Create new .env file
-            logger.debug("Creating new .env file with DIGITALOCEAN_API_TOKEN")
-            env_file.write_text(env_token_line)
+                # Create new .env file
+                logger.debug("Creating new .env file with DIGITALOCEAN_API_TOKEN")
+                env_file.write_text(env_token_line)
+        except Exception as e:
+            raise Exception(f"Failed to update .env file: {e}") from e
 
         zip_path = source_dir / f"{agent_deployment_name}.zip"
+        logger.debug(f"Zip will be created at: {zip_path}")
 
         # Run in thread pool to avoid blocking
-        await asyncio.to_thread(self.zip_creator.create_zip, source_dir, zip_path)
+        try:
+            await asyncio.to_thread(self.zip_creator.create_zip, source_dir, zip_path)
+        except Exception as e:
+            raise Exception(f"Failed to create zip archive: {e}") from e
 
         return zip_path
 

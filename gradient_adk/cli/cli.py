@@ -245,17 +245,88 @@ def agent_deploy(
         help="DigitalOcean API token (overrides DIGITALOCEAN_API_TOKEN env var)",
         envvar="DIGITALOCEAN_API_TOKEN",
         hide_input=True,
-    )
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", "-v", help="Enable verbose logging for debugging deployment"
+    ),
+    skip_validation: bool = typer.Option(
+        False,
+        "--skip-validation",
+        help="Skip pre-deployment validation (not recommended)",
+    ),
 ):
     """Deploy the agent to DigitalOcean."""
     import asyncio
     from pathlib import Path
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+    from gradient_adk.cli.agent.deployment.validation import (
+        validate_agent_entrypoint,
+        ValidationError,
+    )
+
+    # Set verbose mode globally if requested
+    if verbose:
+        import os
+
+        os.environ["GRADIENT_VERBOSE"] = "1"
+        # Configure logging with verbose mode
+        from gradient_adk.logging import configure_logging
+
+        configure_logging(force_verbose=True)
+        typer.echo(
+            "🔍 Verbose mode enabled - detailed deployment logging will be shown"
+        )
+        typer.echo()
 
     try:
         # Get configuration
         agent_workspace_name = _agent_config_manager.get_agent_name()
         agent_deployment_name = _agent_config_manager.get_agent_environment()
+        entrypoint_file = _agent_config_manager.get_entrypoint_file()
+
+        # Validate names follow requirements (alphanumeric, hyphens, underscores only)
+        import re
+
+        if not re.match(r"^[a-zA-Z0-9_-]+$", agent_workspace_name):
+            typer.echo(
+                f"❌ Invalid agent workspace name: '{agent_workspace_name}'", err=True
+            )
+            typer.echo(
+                "Agent workspace name can only contain alphanumeric characters, hyphens, and underscores.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        if not re.match(r"^[a-zA-Z0-9_-]+$", agent_deployment_name):
+            typer.echo(
+                f"❌ Invalid deployment name: '{agent_deployment_name}'", err=True
+            )
+            typer.echo(
+                "Deployment name can only contain alphanumeric characters, hyphens, and underscores.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        # Validate agent before deploying (unless skipped)
+        if not skip_validation:
+            try:
+                validate_agent_entrypoint(
+                    source_dir=Path.cwd(),
+                    entrypoint_file=entrypoint_file,
+                    verbose=verbose,
+                )
+            except ValidationError as e:
+                typer.echo(f"❌ Validation failed:\n{e}", err=True)
+                typer.echo(
+                    "\nFix the issues above and try again, or use --skip-validation to bypass (not recommended).",
+                    err=True,
+                )
+                raise typer.Exit(1)
+        else:
+            typer.echo(
+                "⚠️  Skipping validation - deployment may fail if agent has issues"
+            )
+            typer.echo()
 
         # Get API token
         if not api_token:
@@ -303,9 +374,15 @@ def agent_deploy(
         typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
     except Exception as e:
-        typer.echo(f"❌ Deployment failed: {e}", err=True)
+        import traceback
+
+        # Get error message with fallback
+        error_msg = str(e) if str(e) else repr(e)
+
+        typer.echo(f"❌ Deployment failed: {error_msg}", err=True)
+
         typer.echo(
-            f"Ensure that your agent can start up successfully with the correct environment variables prior to deploying.",
+            "\nEnsure that your agent can start up successfully with the correct environment variables prior to deploying.",
             err=True,
         )
         raise typer.Exit(1)
@@ -321,7 +398,7 @@ def agent_traces(
         hide_input=True,
     )
 ):
-    """Open the Galileo traces UI for monitoring agent execution."""
+    """Open the DigitalOcean traces UI for monitoring agent execution."""
     import asyncio
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
 
@@ -335,7 +412,7 @@ def agent_traces(
             api_token = get_do_api_token()
 
         typer.echo(
-            f"🔍 Opening Galileo Traces UI for {agent_workspace_name}/{agent_deployment_name}..."
+            f"🔍 Opening DigitalOcean Traces UI for {agent_workspace_name}/{agent_deployment_name}..."
         )
         typer.echo()
 

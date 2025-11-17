@@ -370,10 +370,28 @@ class LangGraphInstrumentor:
             # Unknown type -> leave untouched
             return func
 
-        def wrapped_add_node(graph_self, name, func, *args, **kwargs):
-            return original_add_node(
-                graph_self, name, wrap_callable(name, func), *args, **kwargs
-            )
+        def wrapped_add_node(graph_self, *args, **kwargs):
+            # Handle both call signatures:
+            # 1. add_node(func) - single arg
+            # 2. add_node(name, func) - two args
+
+            if len(args) == 1:
+                func = args[0]
+                # Infer name from function
+                name = getattr(func, "__name__", str(func))
+                wrapped_func = wrap_callable(name, func)
+                return original_add_node(graph_self, wrapped_func, **kwargs)
+
+            elif len(args) >= 2:
+                name = args[0]
+                func = args[1]
+                wrapped_func = wrap_callable(name, func)
+                return original_add_node(
+                    graph_self, name, wrapped_func, *args[2:], **kwargs
+                )
+
+            # Fallback for edge cases
+            return original_add_node(graph_self, *args, **kwargs)
 
         StateGraph.add_node = wrapped_add_node
         self._installed = True

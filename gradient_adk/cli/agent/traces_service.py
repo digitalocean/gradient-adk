@@ -1,4 +1,4 @@
-"""Service for managing agent traces and opening Galileo console."""
+"""Service for managing agent traces and opening DigitalOcean Traces console."""
 
 from __future__ import annotations
 import webbrowser
@@ -37,7 +37,7 @@ class TracesService(Protocol):
 
 
 class GalileoTracesService:
-    """Service for opening Galileo traces console."""
+    """Service for opening traces console."""
 
     def __init__(self, client: AsyncDigitalOceanGenAI):
         """Initialize the traces service.
@@ -47,14 +47,14 @@ class GalileoTracesService:
         """
         self.client = client
 
-    def _build_galileo_redirect_url(
+    def _build_traces_redirect_url(
         self, base_url: str, project_id: str, logstream_id: str
     ) -> str:
-        """Build the Galileo redirect URL.
+        """Build the Traces redirect URL.
 
         Args:
-            base_url: Base URL of the Galileo service
-            project_id: Galileo project ID
+            base_url: Base URL of the Traces service
+            project_id: Traces project ID
             logstream_id: Log stream ID
 
         Returns:
@@ -64,7 +64,7 @@ class GalileoTracesService:
         base_url = base_url.rstrip("/")
         return f"{base_url}/white-label-login"
 
-    def _open_galileo_console(
+    def _open_traces_console(
         self,
         base_url: str,
         access_token: str,
@@ -74,7 +74,7 @@ class GalileoTracesService:
         agent_name: str,
     ) -> None:
         """
-        Open Galileo console by triggering a real POST in the user's browser.
+        Open Traces console by triggering a real POST in the user's browser.
 
         Strategy:
         1) Build a small HTML page with a <form method="post"> to the redirect URL.
@@ -86,7 +86,7 @@ class GalileoTracesService:
         - The token/value will still be present in the local HTML page the browser loads.
             Use short-lived tokens.
         """
-        redirect_url = self._build_galileo_redirect_url(
+        redirect_url = self._build_traces_redirect_url(
             base_url, project_id, logstream_id
         )
 
@@ -186,13 +186,13 @@ class GalileoTracesService:
     async def open_traces_console(
         self, agent_workspace_name: str, agent_deployment_name: str
     ) -> None:
-        """Open the Galileo traces console in the browser.
+        """Open the traces console in the browser.
 
         This method:
         1. Lists agent workspaces to find the workspace UUID
         2. Gets agent workspace deployment details
         3. Gets tracing token
-        4. Opens Galileo console with the credentials
+        4. Opens Traces console with the credentials
 
         Args:
             agent_workspace_name: Name of the agent workspace
@@ -238,8 +238,8 @@ class GalileoTracesService:
             agent_deployment_name=agent_deployment_name,
         )
 
-        # Open Galileo console
-        self._open_galileo_console(
+        # Open Traces console
+        self._open_traces_console(
             base_url=tracing_token.base_url,
             access_token=tracing_token.access_token,
             logstream_id=logging_config.log_stream_id,

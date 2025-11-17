@@ -46,6 +46,7 @@ class DirectoryZipCreator:
 
         Raises:
             ValueError: If source_dir doesn't exist or isn't a directory
+            Exception: If zip creation fails
         """
         if not source_dir.exists():
             raise ValueError(f"Source directory does not exist: {source_dir}")
@@ -54,16 +55,51 @@ class DirectoryZipCreator:
             raise ValueError(f"Source path is not a directory: {source_dir}")
 
         logger.debug(f"Source directory: {source_dir}")
+        logger.debug(f"Output path: {output_path}")
         logger.debug(f"Exclude patterns: {self.exclude_patterns}")
 
-        with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for file_path in source_dir.rglob("*"):
-                if file_path.is_file() and not self._should_exclude(
-                    file_path, source_dir
-                ):
-                    arcname = file_path.relative_to(source_dir)
-                    logger.debug(f"Adding to zip: {arcname}")
-                    zipf.write(file_path, arcname)
+        file_count = 0
+        try:
+            with zipfile.ZipFile(output_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+                for file_path in source_dir.rglob("*"):
+                    if file_path.is_file() and not self._should_exclude(
+                        file_path, source_dir
+                    ):
+                        try:
+                            arcname = file_path.relative_to(source_dir)
+                            # Convert to forward slashes for cross-platform compatibility
+                            arcname_str = str(arcname).replace("\\", "/")
+                            logger.debug(f"Adding to zip: {arcname_str}")
+                            zipf.write(file_path, arcname_str)
+                            file_count += 1
+                        except Exception as e:
+                            logger.error(f"Failed to add {file_path} to zip: {e}")
+                            raise Exception(
+                                f"Failed to add {file_path} to zip: {e}"
+                            ) from e
+
+            logger.debug(f"Successfully created zip with {file_count} files")
+
+            # Verify the zip was created
+            if not output_path.exists():
+                raise Exception(f"Zip file was not created at {output_path}")
+
+            zip_size = output_path.stat().st_size
+            logger.debug(f"Zip file size: {zip_size} bytes")
+
+            if zip_size == 0:
+                raise Exception(f"Created zip file is empty: {output_path}")
+
+        except Exception as e:
+            # Clean up partial zip file if it exists
+            if output_path.exists():
+                try:
+                    output_path.unlink()
+                    logger.debug(f"Cleaned up partial zip file: {output_path}")
+                except Exception:
+                    pass
+            raise
+
         return output_path
 
     def _should_exclude(self, file_path: Path, source_dir: Path) -> bool:

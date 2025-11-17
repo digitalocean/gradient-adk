@@ -27,6 +27,9 @@ class DirectLaunchService(LaunchService):
         self, dev_mode: bool = False, host: str = "0.0.0.0", port: int = 8080
     ) -> None:
         """Launch the agent locally using FastAPI server."""
+        # Load environment variables from .env if it exists
+        self._load_env_file()
+
         config = self._load_config()
         entrypoint_file = config.get("entrypoint_file")
         agent_name = config.get("agent_name", "gradient-agent")
@@ -64,6 +67,18 @@ class DirectLaunchService(LaunchService):
         except Exception as e:
             typer.echo(f"Error reading agent configuration: {e}", err=True)
             raise typer.Exit(1)
+
+    def _load_env_file(self) -> None:
+        """Load environment variables from .env file if it exists."""
+        env_file = Path.cwd() / ".env"
+        if env_file.exists():
+            try:
+                from dotenv import load_dotenv
+
+                load_dotenv(env_file)
+                typer.echo(f"✅ Loaded environment variables from .env")
+            except Exception as e:
+                typer.echo(f"⚠️  Warning: Failed to load .env file: {e}", err=True)
 
     def _validate_entrypoint_file(self, entrypoint_file: str) -> None:
         """Validate that the entrypoint file exists."""

@@ -31,18 +31,41 @@ class HttpxS3Uploader:
         Raises:
             Exception: If the upload fails
         """
+        logger.debug(f"Uploading file to S3: {file_path}")
 
-        async with httpx.AsyncClient() as client:
-            with open(file_path, "rb") as f:
-                file_content = f.read()
+        # Validate file exists before attempting upload
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found for upload: {file_path}")
 
-            response = await client.put(
-                presigned_url,
-                content=file_content,
-                headers={"Content-Type": "application/zip"},
-            )
+        if not file_path.is_file():
+            raise ValueError(f"Path is not a file: {file_path}")
 
-            if response.status_code not in (200, 204):
-                raise Exception(
-                    f"Failed to upload file to S3: {response.status_code} - {response.text}"
+        try:
+            # Read file content synchronously (since we're in asyncio.to_thread context anyway)
+            file_content = file_path.read_bytes()
+            logger.debug(f"Read {len(file_content)} bytes from {file_path.name}")
+        except Exception as e:
+            raise Exception(f"Failed to read file {file_path}: {e}") from e
+
+        async with httpx.AsyncClient(
+            timeout=300.0
+        ) as client:  # 5 minute timeout for large files
+            try:
+                response = await client.put(
+                    presigned_url,
+                    content=file_content,
+                    headers={"Content-Type": "application/zip"},
                 )
+
+                logger.debug(f"S3 upload response status: {response.status_code}")
+
+                if response.status_code not in (200, 204):
+                    raise Exception(
+                        f"Failed to upload file to S3: {response.status_code} - {response.text}"
+                    )
+
+                logger.debug(f"Successfully uploaded {file_path.name} to S3")
+            except httpx.HTTPError as e:
+                raise Exception(f"HTTP error during S3 upload: {e}") from e
+            except Exception as e:
+                raise Exception(f"Unexpected error during S3 upload: {e}") from e
