@@ -49,6 +49,24 @@ jobs:
       - name: Check distribution
         run: twine check dist/*
       
+      - name: Publish to TestPyPI
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+        run: |
+          twine upload --repository testpypi dist/*
+      
+      - name: Run integration tests
+        run: |
+          echo "🧪 Integration tests placeholder"
+          echo "TODO: Add integration tests here to validate the TestPyPI package"
+          echo "Examples:"
+          echo "  - Install from TestPyPI: pip install --index-url https://test.pypi.org/simple/ gradient-adk==${{ steps.get_version.outputs.version }}"
+          echo "  - Run smoke tests against the installed package"
+          echo "  - Validate CLI commands work"
+          echo ""
+          echo "✅ Integration tests passed (placeholder)"
+      
       - name: Publish to PyPI
         env:
           TWINE_USERNAME: __token__
