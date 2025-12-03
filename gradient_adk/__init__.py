@@ -11,6 +11,11 @@ from .streaming import (  # streaming utilities
     stream_json,
     stream_events,
 )
+from .tracing import (  # manual tracing decorators
+    trace_llm,
+    trace_retriever,
+    trace_tool,
+)
 
 __all__ = [
     "entrypoint",
@@ -19,6 +24,9 @@ __all__ = [
     "ServerSentEventsResponse",
     "stream_json",
     "stream_events",
+    "trace_llm",
+    "trace_retriever",
+    "trace_tool",
 ]
 
 __version__ = "0.0.4"
