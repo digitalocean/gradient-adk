@@ -271,8 +271,9 @@ The Gradient ADK is designed to work with any Python-based AI agent framework:
 
 ## Support
 
+- **Examples**: [https://github.com/digitalocean/gradient-adk-examples](https://github.com/digitalocean/gradient-adk-examples)
 - **Gradient Platform**: [https://www.digitalocean.com/products/gradient/platform](https://www.digitalocean.com/products/gradient/platform)
-- **Documentation**: [https://docs.digitalocean.com/products/gradient-ai-platform](https://docs.digitalocean.com/products/gradient-ai-platform)
+- **Documentation**: [https://docs.digitalocean.com/products/gen-ai](https://docs.digitalocean.com/products/gen-ai)
 - **API Reference**: [https://docs.digitalocean.com/reference/api](https://docs.digitalocean.com/reference/api)
 - **Community**: [DigitalOcean Community Forums](https://www.digitalocean.com/community)
 

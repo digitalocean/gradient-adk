@@ -35,7 +35,7 @@ class TrackerDouble:
         self.ended = []
         self.closed = False
 
-    def on_request_start(self, name, inputs):
+    def on_request_start(self, name, inputs, is_evaluation=False):
         self.started.append((name, inputs))
 
     def on_request_end(self, outputs=None, error=None):
@@ -203,9 +203,14 @@ def test_run_endpoint_streaming_success_calls_end_with_none(patch_helpers):
             body = b"".join(resp.iter_bytes())
             assert body == b"abc"  # chunks concatenated
 
-    # For streaming success, outputs=None, error=None at end
+    # For streaming success, the StreamingResponse object is passed to on_request_end
+    # The tracker will wrap it and collect outputs during streaming
     assert tracker.started and tracker.started[-1][0] == "handler"
-    assert tracker.ended and tracker.ended[-1] == (None, None)
+    assert tracker.ended and len(tracker.ended) > 0
+    last_output, last_error = tracker.ended[-1]
+    # The output should be a StreamingResponse object, error should be None
+    assert isinstance(last_output, entrypoint_mod.GradientStreamingResponse)
+    assert last_error is None
 
 
 def test_run_endpoint_streaming_error_calls_end_with_error(patch_helpers):
@@ -228,10 +233,16 @@ def test_run_endpoint_streaming_error_calls_end_with_error(patch_helpers):
                 for _ in resp.iter_bytes():
                     pass
 
-    # Tracker should have been ended with an error
+    # Tracker should have been called on_request_end with the StreamingResponse
+    # Errors during streaming are handled by the tracker's wrapper, not via on_request_end
     assert tracker.started and tracker.started[-1][0] == "handler"
-    assert tracker.ended and tracker.ended[-1][0] is None
-    assert tracker.ended[-1][1]  # error string
+    assert tracker.ended and len(tracker.ended) > 0
+    last_output, last_error = tracker.ended[-1]
+    # The output should be a StreamingResponse object
+    assert isinstance(last_output, entrypoint_mod.GradientStreamingResponse)
+    # Note: The error=None here because streaming errors are caught by the tracker's wrapper
+    # The actual error handling happens inside the async generator wrapper
+    assert last_error is None
 
 
 def test_shutdown_event_calls_tracker_aclose(patch_helpers):
