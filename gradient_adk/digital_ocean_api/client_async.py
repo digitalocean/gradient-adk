@@ -38,6 +38,7 @@ from .models import (
     CreateEvaluationDatasetFileUploadPresignedUrlsInput,
     CreateEvaluationDatasetFileUploadPresignedUrlsOutput,
     GetEvaluationRunOutput,
+    ListEvaluationMetricsOutput,
 )
 from .errors import (
     DOAPIAuthError,
@@ -388,7 +389,7 @@ class AsyncDigitalOceanGenAI:
         Returns:
             UpdateEvaluationTestCaseOutput containing the test case UUID and new version
         """
-        logger.debug(
+        logger.info(
             "Updating evaluation test case",
             test_case_uuid=input_data.test_case_uuid,
             name=input_data.name,
@@ -396,7 +397,10 @@ class AsyncDigitalOceanGenAI:
         )
 
         path = f"/gen-ai/evaluation_test_cases/{input_data.test_case_uuid}"
-        body = self._model_dump(input_data)
+        # Exclude test_case_uuid from body since it's in the URL path
+        body = input_data.model_dump(
+            by_alias=True, exclude_none=True, mode="json", exclude={"test_case_uuid"}
+        )
         data = await self._put_json(path, body)
         return UpdateEvaluationTestCaseOutput(**data)
 
@@ -486,6 +490,18 @@ class AsyncDigitalOceanGenAI:
         path = f"/gen-ai/evaluation_runs/{evaluation_run_uuid}"
         data = await self._get_json(path)
         return GetEvaluationRunOutput(**data)
+
+    async def list_evaluation_metrics(self) -> ListEvaluationMetricsOutput:
+        """List all available evaluation metrics.
+
+        Returns:
+            ListEvaluationMetricsOutput containing the list of evaluation metrics
+        """
+        logger.debug("Listing evaluation metrics")
+
+        path = "/gen-ai/evaluation_metrics"
+        data = await self._get_json(path)
+        return ListEvaluationMetricsOutput(**data)
 
     @staticmethod
     def _model_dump(model: BaseModel) -> dict:

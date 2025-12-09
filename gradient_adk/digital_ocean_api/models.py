@@ -486,18 +486,25 @@ class EvaluationMetric(BaseModel):
 
     metric_uuid: str = Field(..., description="UUID of the metric")
     metric_name: str = Field(..., description="Name of the metric")
-    category: str = Field(..., description="Category of the metric")
     description: Optional[str] = Field(None, description="Description of the metric")
-    metric_type: Optional[str] = Field(None, description="Type of the metric")
-    metric_value_type: Optional[str] = Field(
+    metric_type: Optional[EvaluationMetricType] = Field(
+        None, description="Type of the metric"
+    )
+    metric_value_type: Optional[EvaluationMetricValueType] = Field(
         None, description="Value type of the metric"
     )
-    range_min: Optional[int] = Field(None, description="Minimum range value")
-    range_max: Optional[int] = Field(None, description="Maximum range value")
-    metric_rank: Optional[int] = Field(None, description="Rank of the metric")
+    range_min: Optional[float] = Field(None, description="Minimum range value")
+    range_max: Optional[float] = Field(None, description="Maximum range value")
+    inverted: Optional[bool] = Field(
+        None, description="If true, lower values are better"
+    )
+    category: Optional[EvaluationMetricCategory] = Field(
+        None, description="Category of the metric"
+    )
     is_metric_goal: Optional[bool] = Field(
         None, description="Whether this is a goal metric"
     )
+    metric_rank: Optional[int] = Field(None, description="Rank of the metric")
 
 
 class EvaluationDataset(BaseModel):
@@ -625,6 +632,18 @@ class CreateEvaluationTestCaseOutput(BaseModel):
     test_case_uuid: str = Field(..., description="Test case UUID")
 
 
+class UpdateEvaluationTestCaseMetrics(BaseModel):
+    """
+    Metrics update structure for evaluation test cases.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    metric_uuids: List[str] = Field(
+        default_factory=list, description="List of metric UUIDs"
+    )
+
+
 class UpdateEvaluationTestCaseInput(BaseModel):
     """
     Input for updating an evaluation test case.
@@ -638,8 +657,8 @@ class UpdateEvaluationTestCaseInput(BaseModel):
     dataset_uuid: Optional[str] = Field(
         None, description="Dataset against which the test case is executed"
     )
-    metrics: Optional[List[str]] = Field(
-        None, description="Full metric list to use for evaluation"
+    metrics: Optional[UpdateEvaluationTestCaseMetrics] = Field(
+        None, description="Metrics to use for evaluation"
     )
     star_metric: Optional[StarMetric] = Field(
         None, description="Optional star metric to update"
@@ -755,12 +774,32 @@ class CreateEvaluationDatasetFileUploadPresignedUrlsOutput(BaseModel):
     )
 
 
+class EvaluationMetricType(str, Enum):
+    """Metric type enumeration."""
+
+    METRIC_TYPE_UNSPECIFIED = "METRIC_TYPE_UNSPECIFIED"
+    METRIC_TYPE_GENERAL_QUALITY = "METRIC_TYPE_GENERAL_QUALITY"
+    METRIC_TYPE_RAG_AND_TOOL = "METRIC_TYPE_RAG_AND_TOOL"
+
+
 class EvaluationMetricValueType(str, Enum):
     """Metric value type enumeration."""
 
-    EVALUATION_METRIC_VALUE_TYPE_UNKNOWN = "EVALUATION_METRIC_VALUE_TYPE_UNKNOWN"
-    EVALUATION_METRIC_VALUE_TYPE_NUMBER = "EVALUATION_METRIC_VALUE_TYPE_NUMBER"
-    EVALUATION_METRIC_VALUE_TYPE_STRING = "EVALUATION_METRIC_VALUE_TYPE_STRING"
+    METRIC_VALUE_TYPE_UNSPECIFIED = "METRIC_VALUE_TYPE_UNSPECIFIED"
+    METRIC_VALUE_TYPE_NUMBER = "METRIC_VALUE_TYPE_NUMBER"
+    METRIC_VALUE_TYPE_STRING = "METRIC_VALUE_TYPE_STRING"
+    METRIC_VALUE_TYPE_PERCENTAGE = "METRIC_VALUE_TYPE_PERCENTAGE"
+
+
+class EvaluationMetricCategory(str, Enum):
+    """Metric category enumeration."""
+
+    METRIC_CATEGORY_UNSPECIFIED = "METRIC_CATEGORY_UNSPECIFIED"
+    METRIC_CATEGORY_CORRECTNESS = "METRIC_CATEGORY_CORRECTNESS"
+    METRIC_CATEGORY_USER_OUTCOMES = "METRIC_CATEGORY_USER_OUTCOMES"
+    METRIC_CATEGORY_SAFETY_AND_SECURITY = "METRIC_CATEGORY_SAFETY_AND_SECURITY"
+    METRIC_CATEGORY_CONTEXT_QUALITY = "METRIC_CATEGORY_CONTEXT_QUALITY"
+    METRIC_CATEGORY_MODEL_FIT = "METRIC_CATEGORY_MODEL_FIT"
 
 
 class EvaluationMetricResult(BaseModel):
@@ -790,11 +829,15 @@ class EvaluationRunStatus(str, Enum):
     """Evaluation run status enumeration."""
 
     EVALUATION_RUN_STATUS_UNKNOWN = "EVALUATION_RUN_STATUS_UNKNOWN"
-    EVALUATION_RUN_STATUS_QUEUED = "EVALUATION_RUN_STATUS_QUEUED"
-    EVALUATION_RUN_STATUS_RUNNING = "EVALUATION_RUN_STATUS_RUNNING"
-    EVALUATION_RUN_STATUS_COMPLETED = "EVALUATION_RUN_STATUS_COMPLETED"
-    EVALUATION_RUN_STATUS_FAILED = "EVALUATION_RUN_STATUS_FAILED"
-    EVALUATION_RUN_STATUS_CANCELLED = "EVALUATION_RUN_STATUS_CANCELLED"
+    EVALUATION_RUN_QUEUED = "EVALUATION_RUN_QUEUED"
+    EVALUATION_RUN_RUNNING = "EVALUATION_RUN_RUNNING"
+    EVALUATION_RUN_COMPLETED = "EVALUATION_RUN_COMPLETED"
+    EVALUATION_RUN_FAILED = "EVALUATION_RUN_FAILED"
+    EVALUATION_RUN_CANCELLED = "EVALUATION_RUN_CANCELLED"
+    EVALUATION_RUN_RUNNING_DATASET = "EVALUATION_RUN_RUNNING_DATASET"
+    EVALUATION_RUN_EVALUATING_RESULTS = "EVALUATION_RUN_EVALUATING_RESULTS"
+    EVALUATION_RUN_PARTIALLY_SUCCESSFUL = "EVALUATION_RUN_PARTIALLY_SUCCESSFUL"
+    EVALUATION_RUN_SUCCESSFUL = "EVALUATION_RUN_SUCCESSFUL"
 
 
 class EvaluationRun(BaseModel):
@@ -862,3 +905,15 @@ class GetEvaluationRunOutput(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     evaluation_run: EvaluationRun = Field(..., description="The evaluation run")
+
+
+class ListEvaluationMetricsOutput(BaseModel):
+    """
+    Response for listing evaluation metrics.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    metrics: List[EvaluationMetric] = Field(
+        default_factory=list, description="List of evaluation metrics"
+    )

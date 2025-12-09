@@ -133,7 +133,7 @@ class DirectLaunchService(LaunchService):
         if dev_banner:
             typer.echo(f"Entrypoint: {entrypoint_file}")
             typer.echo(f"Server: http://{host}:{port}")
-            typer.echo(f"Agent: {agent_name}")
+            typer.echo(f"Agent deployment name: {agent_name}")
             typer.echo(f"Entrypoint endpoint: http://{host}:{port}/run")
             typer.echo("Auto-reload enabled - server will restart on file changes")
             typer.echo("Press Ctrl+C to stop the server\n")

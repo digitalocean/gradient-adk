@@ -521,6 +521,19 @@ def agent_evaluate(
     dataset_file: Optional[str] = typer.Option(
         None, "--dataset-file", help="Path to the CSV dataset file for evaluation"
     ),
+    categories: Optional[str] = typer.Option(
+        None,
+        "--categories",
+        help="Comma-separated list of metric categories (correctness,context_quality,user_outcomes,model_fit,safety_and_security)",
+    ),
+    star_metric_name: Optional[str] = typer.Option(
+        None,
+        "--star-metric-name",
+        help="Name of the star metric (default: Correctness (general hallucinations))",
+    ),
+    success_threshold: float = typer.Option(
+        80.0, "--success-threshold", help="Success threshold for star metric (0-100)"
+    ),
     api_token: Optional[str] = typer.Option(
         None,
         "--api-token",
@@ -536,6 +549,8 @@ def agent_evaluate(
     import asyncio
     from pathlib import Path
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+    from gradient_adk.cli.agent.evaluation_service import EvaluationService
+    from gradient_adk.digital_ocean_api.models import EvaluationMetricValueType
 
     try:
         # Get configuration
@@ -546,12 +561,99 @@ def agent_evaluate(
         if not api_token:
             api_token = get_do_api_token()
 
+        # Create async function to handle interactive prompts with API access
+        async def get_interactive_inputs():
+            async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
+                eval_service = EvaluationService(client=client)
+                metrics_by_category = await eval_service.get_metrics_by_category()
+
+                nonlocal test_case_name, dataset_file, categories, star_metric_name, success_threshold
+
+                if test_case_name is None:
+                    test_case_name = typer.prompt("Evaluation test case name")
+                if dataset_file is None:
+                    dataset_file = typer.prompt("Dataset file path")
+
+                if categories is None:
+                    typer.echo()
+                    typer.echo("Available metric categories:")
+                    for cat, metrics in sorted(metrics_by_category.items()):
+                        typer.echo(f"  • {cat} ({len(metrics)} metrics)")
+                    typer.echo()
+                    categories = typer.prompt(
+                        "Select metric categories (comma-separated)",
+                        default="correctness,context_quality",
+                    )
+
+                # Parse categories to get selected metrics
+                metric_categories_list = [cat.strip() for cat in categories.split(",")]
+                selected_metrics = []
+                for cat in metric_categories_list:
+                    if cat in metrics_by_category:
+                        selected_metrics.extend(metrics_by_category[cat])
+
+                if star_metric_name is None and selected_metrics:
+                    typer.echo()
+                    typer.echo("Available star metrics from selected categories:")
+                    for i, metric in enumerate(selected_metrics[:10], 1):
+                        value_type = (
+                            metric.metric_value_type.value.replace(
+                                "METRIC_VALUE_TYPE_", ""
+                            ).lower()
+                            if metric.metric_value_type
+                            else "unknown"
+                        )
+                        typer.echo(f"  {i}. {metric.metric_name} ({value_type})")
+                    if len(selected_metrics) > 10:
+                        typer.echo(f"  ... and {len(selected_metrics) - 10} more")
+                    typer.echo()
+                    star_metric_name = typer.prompt(
+                        "Star metric name",
+                        default=(
+                            selected_metrics[0].metric_name if selected_metrics else ""
+                        ),
+                    )
+
+                # Get star metric details for threshold validation
+                star_metric_obj = None
+                if star_metric_name:
+                    star_metric_obj = await eval_service.find_metric_by_name(
+                        star_metric_name
+                    )
+
+                if success_threshold is None and star_metric_obj:
+                    # Only prompt for threshold if it's a number or percentage metric
+                    if star_metric_obj.metric_value_type in [
+                        EvaluationMetricValueType.METRIC_VALUE_TYPE_NUMBER,
+                        EvaluationMetricValueType.METRIC_VALUE_TYPE_PERCENTAGE,
+                    ]:
+                        typer.echo()
+                        range_info = ""
+                        if (
+                            star_metric_obj.range_min is not None
+                            and star_metric_obj.range_max is not None
+                        ):
+                            range_info = f" (range: {star_metric_obj.range_min}-{star_metric_obj.range_max})"
+                        elif star_metric_obj.range_min is not None:
+                            range_info = f" (min: {star_metric_obj.range_min})"
+                        elif star_metric_obj.range_max is not None:
+                            range_info = f" (max: {star_metric_obj.range_max})"
+
+                        default_threshold = 80.0
+                        if star_metric_obj.range_max is not None:
+                            default_threshold = min(
+                                80.0, star_metric_obj.range_max * 0.8
+                            )
+
+                        success_threshold = typer.prompt(
+                            f"Success threshold for '{star_metric_obj.metric_name}'{range_info}",
+                            default=default_threshold,
+                            type=float,
+                        )
+
         # Handle interactive prompts
         if interactive:
-            if test_case_name is None:
-                test_case_name = typer.prompt("Evaluation test case name")
-            if dataset_file is None:
-                dataset_file = typer.prompt("Dataset file path")
+            asyncio.run(get_interactive_inputs())
 
         # Validate required inputs
         if not test_case_name:
@@ -560,6 +662,12 @@ def agent_evaluate(
         if not dataset_file:
             typer.echo("❌ Dataset file is required", err=True)
             raise typer.Exit(1)
+        if not categories:
+            typer.echo("❌ Metric categories are required", err=True)
+            raise typer.Exit(1)
+
+        # Parse categories
+        metric_categories = [cat.strip() for cat in categories.split(",")]
 
         # Validate dataset file path
         dataset_path = Path(dataset_file)
@@ -578,6 +686,11 @@ def agent_evaluate(
             f"🧪 Running evaluation '{test_case_name}' for {agent_workspace_name}/{agent_deployment_name}..."
         )
         typer.echo(f"📊 Dataset: {dataset_file}")
+        typer.echo(f"📈 Metric categories: {', '.join(metric_categories)}")
+        if star_metric_name:
+            typer.echo(f"⭐ Star metric: {star_metric_name}")
+        if success_threshold is not None:
+            typer.echo(f"🎯 Success threshold: {success_threshold}")
         typer.echo()
 
         # Create async function to run evaluation
@@ -591,6 +704,9 @@ def agent_evaluate(
                     agent_deployment_name=agent_deployment_name,
                     test_case_name=test_case_name,
                     dataset_file_path=dataset_path,
+                    metric_categories=metric_categories,
+                    star_metric_name=star_metric_name,
+                    success_threshold=success_threshold,
                 )
 
                 typer.echo(f"✅ Evaluation started successfully!")
@@ -616,7 +732,9 @@ def agent_evaluate(
 
         # Display basic info
         typer.echo(f"Test Case: {evaluation_run.test_case_name}")
-        typer.echo(f"Agent: {evaluation_run.agent_name or 'N/A'}")
+        typer.echo(
+            f"Agent deployment name: {evaluation_run.agent_deployment_name or 'N/A'}"
+        )
         typer.echo(f"Status: {evaluation_run.status.value}")
 
         # Display pass status if available
@@ -656,7 +774,7 @@ def agent_evaluate(
         typer.echo()
         typer.echo("=" * 60)
         typer.echo(f"📊 View full results in the DigitalOcean console:")
-        typer.echo(f"   https://cloud.digitalocean.com/genai")
+        typer.echo(f"   https://cloud.digitalocean.com/gen-ai/workspaces")
         typer.echo("=" * 60)
 
     except TimeoutError as e:
@@ -665,7 +783,7 @@ def agent_evaluate(
         typer.echo(
             "\nThe evaluation is still running. Check the console for status:", err=True
         )
-        typer.echo("  https://cloud.digitalocean.com/genai", err=True)
+        typer.echo("  https://cloud.digitalocean.com/gen-ai/workspaces", err=True)
         raise typer.Exit(1)
     except EnvironmentError as e:
         typer.echo(f"❌ {e}", err=True)
