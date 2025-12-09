@@ -4,7 +4,7 @@
 
 <!-- prettier-ignore -->
 [![PyPI version](https://img.shields.io/pypi/v/gradient-adk.svg?label=pypi%20(stable))](https://pypi.org/project/gradient-adk/)
-[![Docs](https://img.shields.io/badge/Docs-8A2BE2)](https://docs.digitalocean.com/products/gen-ai/)
+[![Docs](https://img.shields.io/badge/Docs-8A2BE2)](https://docs.digitalocean.com/products/gradient-ai-platform/)
 
 The Gradient™ Agent Development Kit (ADK) is a comprehensive toolkit for building, testing, deploying, and evaluating AI agents on DigitalOcean's Gradient™ AI Platform. It provides both a **CLI** for development workflows and a **runtime environment** for hosting agents with automatic trace capture.
 
@@ -272,7 +272,7 @@ The Gradient ADK is designed to work with any Python-based AI agent framework:
 ## Support
 
 - **Gradient Platform**: [https://www.digitalocean.com/products/gradient/platform](https://www.digitalocean.com/products/gradient/platform)
-- **Documentation**: [https://docs.digitalocean.com/products/gen-ai](https://docs.digitalocean.com/products/gen-ai)
+- **Documentation**: [https://docs.digitalocean.com/products/gradient-ai-platform](https://docs.digitalocean.com/products/gradient-ai-platform)
 - **API Reference**: [https://docs.digitalocean.com/reference/api](https://docs.digitalocean.com/reference/api)
 - **Community**: [DigitalOcean Community Forums](https://www.digitalocean.com/community)
 
