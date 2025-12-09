@@ -7,6 +7,7 @@ name = "gradient-adk"
 version = "0.0.8"
 description = "Gradient AI Platform Agent Development Kit"
 requires-python = ">=3.10"
+readme = "README.md"
 license = "Apache-2.0"
 dependencies = [
   "fastapi>=0.104.0",
