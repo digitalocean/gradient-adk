@@ -8,6 +8,7 @@ from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigMan
 from gradient_adk.cli.agent.deployment.deploy_service import AgentDeployService
 from gradient_adk.cli.agent.direct_launch_service import DirectLaunchService
 from gradient_adk.cli.agent.traces_service import GalileoTracesService
+from gradient_adk.cli.agent.evaluation_service import EvaluationService
 from gradient_adk.cli.agent.env_utils import get_do_api_token, EnvironmentError
 
 
@@ -337,10 +338,34 @@ def agent_deploy(
 
         # Get project ID from default project
         async def deploy():
+            from gradient_adk.digital_ocean_api.errors import (
+                DOAPIClientError,
+                DOAPIAuthError,
+            )
+
             async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
                 # Get default project
-                project_response = await client.get_default_project()
-                project_id = project_response.project.id
+                try:
+                    project_response = await client.get_default_project()
+                    project_id = project_response.project.id
+                except (DOAPIClientError, DOAPIAuthError) as e:
+                    typer.echo(
+                        "❌ Failed to retrieve default project from DigitalOcean API",
+                        err=True,
+                    )
+                    typer.echo(
+                        "\nYour API token must have the following scopes:", err=True
+                    )
+                    typer.echo("  • projects:read (or projects:*)", err=True)
+                    typer.echo("  • genai:*", err=True)
+                    typer.echo(
+                        "\nPlease create a new API token with these scopes at:",
+                        err=True,
+                    )
+                    typer.echo(
+                        "  https://cloud.digitalocean.com/account/api/tokens", err=True
+                    )
+                    raise typer.Exit(1)
 
                 # Create deploy service with injected client
                 deploy_service = AgentDeployService(client=client)
@@ -363,7 +388,10 @@ def agent_deploy(
                     f"To invoke your deployed agent, send a POST request to {invoke_url} with your properly formatted payload."
                 )
                 example_cmd = f"""Example:
-  curl -X POST {invoke_url} -d '{{"prompt": "hello"}}' """
+  curl -X POST {invoke_url} \\
+    -H "Authorization: Bearer $DIGITALOCEAN_API_TOKEN" \\
+    -H "Content-Type: application/json" \\
+    -d '{{"prompt": "hello"}}'"""
                 typer.echo(example_cmd)
 
         asyncio.run(deploy())
@@ -482,6 +510,173 @@ def agent_logs(
         raise typer.Exit(1)
     except Exception as e:
         typer.echo(f"❌ Failed to fetch logs: {e}", err=True)
+        raise typer.Exit(1)
+
+
+@agent_app.command("evaluate")
+def agent_evaluate(
+    test_case_name: Optional[str] = typer.Option(
+        None, "--test-case-name", help="Name of the evaluation test case"
+    ),
+    dataset_file: Optional[str] = typer.Option(
+        None, "--dataset-file", help="Path to the CSV dataset file for evaluation"
+    ),
+    api_token: Optional[str] = typer.Option(
+        None,
+        "--api-token",
+        help="DigitalOcean API token (overrides DIGITALOCEAN_API_TOKEN env var)",
+        envvar="DIGITALOCEAN_API_TOKEN",
+        hide_input=True,
+    ),
+    interactive: bool = typer.Option(
+        True, "--interactive/--no-interactive", help="Interactive prompt mode"
+    ),
+):
+    """Run an evaluation test case for the agent."""
+    import asyncio
+    from pathlib import Path
+    from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+
+    try:
+        # Get configuration
+        agent_workspace_name = _agent_config_manager.get_agent_name()
+        agent_deployment_name = _agent_config_manager.get_agent_environment()
+
+        # Get API token
+        if not api_token:
+            api_token = get_do_api_token()
+
+        # Handle interactive prompts
+        if interactive:
+            if test_case_name is None:
+                test_case_name = typer.prompt("Evaluation test case name")
+            if dataset_file is None:
+                dataset_file = typer.prompt("Dataset file path")
+
+        # Validate required inputs
+        if not test_case_name:
+            typer.echo("❌ Test case name is required", err=True)
+            raise typer.Exit(1)
+        if not dataset_file:
+            typer.echo("❌ Dataset file is required", err=True)
+            raise typer.Exit(1)
+
+        # Validate dataset file path
+        dataset_path = Path(dataset_file)
+        if not dataset_path.exists():
+            typer.echo(f"❌ Dataset file not found: {dataset_file}", err=True)
+            raise typer.Exit(1)
+
+        if dataset_path.suffix.lower() != ".csv":
+            typer.echo(
+                f"❌ Dataset file must be a CSV file, got: {dataset_path.suffix}",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        typer.echo(
+            f"🧪 Running evaluation '{test_case_name}' for {agent_workspace_name}/{agent_deployment_name}..."
+        )
+        typer.echo(f"📊 Dataset: {dataset_file}")
+        typer.echo()
+
+        # Create async function to run evaluation
+        async def run_evaluation():
+            async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
+                evaluation_service = EvaluationService(client=client)
+
+                # Start the evaluation
+                evaluation_run_uuid = await evaluation_service.run_evaluation(
+                    agent_workspace_name=agent_workspace_name,
+                    agent_deployment_name=agent_deployment_name,
+                    test_case_name=test_case_name,
+                    dataset_file_path=dataset_path,
+                )
+
+                typer.echo(f"✅ Evaluation started successfully!")
+                typer.echo(f"📋 Evaluation run UUID: {evaluation_run_uuid}")
+                typer.echo()
+                typer.echo("⏳ Waiting for evaluation to complete...")
+
+                # Poll for completion
+                evaluation_run = await evaluation_service.poll_evaluation_run(
+                    evaluation_run_uuid=evaluation_run_uuid
+                )
+
+                return evaluation_run
+
+        evaluation_run = asyncio.run(run_evaluation())
+
+        # Display results
+        typer.echo()
+        typer.echo("=" * 60)
+        typer.echo("✅ Evaluation Completed!")
+        typer.echo("=" * 60)
+        typer.echo()
+
+        # Display basic info
+        typer.echo(f"Test Case: {evaluation_run.test_case_name}")
+        typer.echo(f"Agent: {evaluation_run.agent_name or 'N/A'}")
+        typer.echo(f"Status: {evaluation_run.status.value}")
+
+        # Display pass status if available
+        if evaluation_run.pass_status is not None:
+            status_emoji = "✅" if evaluation_run.pass_status else "❌"
+            typer.echo(
+                f"Pass Status: {status_emoji} {'PASSED' if evaluation_run.pass_status else 'FAILED'}"
+            )
+
+        # Display star metric result if available
+        if evaluation_run.star_metric_result:
+            typer.echo()
+            typer.echo("Star Metric Result:")
+            metric = evaluation_run.star_metric_result
+            typer.echo(f"  Metric: {metric.metric_name}")
+
+            if metric.number_value is not None:
+                typer.echo(f"  Value: {metric.number_value:.2f}")
+            elif metric.string_value is not None:
+                typer.echo(f"  Value: {metric.string_value}")
+
+            if metric.reasoning:
+                typer.echo(f"  Reasoning: {metric.reasoning}")
+
+        # Display run-level metrics if available
+        if evaluation_run.run_level_metric_results:
+            typer.echo()
+            typer.echo("Run-Level Metrics:")
+            for metric in evaluation_run.run_level_metric_results:
+                value_str = ""
+                if metric.number_value is not None:
+                    value_str = f"{metric.number_value:.2f}"
+                elif metric.string_value is not None:
+                    value_str = metric.string_value
+                typer.echo(f"  • {metric.metric_name}: {value_str}")
+
+        typer.echo()
+        typer.echo("=" * 60)
+        typer.echo(f"📊 View full results in the DigitalOcean console:")
+        typer.echo(f"   https://cloud.digitalocean.com/genai")
+        typer.echo("=" * 60)
+
+    except TimeoutError as e:
+        typer.echo()
+        typer.echo(f"⏱️  {e}", err=True)
+        typer.echo(
+            "\nThe evaluation is still running. Check the console for status:", err=True
+        )
+        typer.echo("  https://cloud.digitalocean.com/genai", err=True)
+        raise typer.Exit(1)
+    except EnvironmentError as e:
+        typer.echo(f"❌ {e}", err=True)
+        typer.echo("\nTo set your token:", err=True)
+        typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
+        raise typer.Exit(1)
+    except ValueError as e:
+        typer.echo(f"❌ {e}", err=True)
+        raise typer.Exit(1)
+    except Exception as e:
+        typer.echo(f"❌ Evaluation failed: {e}", err=True)
         raise typer.Exit(1)
 
 

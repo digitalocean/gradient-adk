@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping
 import inspect
+import json
 from typing import Any, Callable, Dict, List, Optional
 
 from gradient_adk.digital_ocean_api import (
@@ -60,6 +61,31 @@ class DigitalOceanTracesTracker:
         If `resp` looks like a streaming response that iterates over `resp.content`,
         return (orig_iterable, setter) so we can replace it. Else None.
         """
+        # For ServerSentEventsResponse and JSONStreamingResponse, we need to access
+        # the ORIGINAL content before SSE/JSON formatting wraps it
+        if isinstance(resp, (ServerSentEventsResponse, StreamingResponse)):
+            # Get the original user generator before formatting
+            # The content is already the formatted generator, but we can get the original
+            # by checking if it was set in __init__
+            # Actually, we need to intercept at a different level
+
+            # Check if we can get to the original content
+            # The formatted_content was created from the user's content
+            # We need to store the original and intercept there
+            content = getattr(resp, "content", None)
+            if content is None:
+                return None
+
+            # The content is already the SSE/JSON formatted generator
+            # We need to wrap it but also parse back the content
+            if hasattr(content, "__aiter__") or inspect.isasyncgen(content):
+
+                def _setter(new_iterable):
+                    resp.content = new_iterable
+
+                return content, _setter
+
+        # Fallback for plain StreamingResponse
         content = getattr(resp, "content", None)
         if content is None:
             return None
@@ -85,8 +111,36 @@ class DigitalOceanTracesTracker:
             async def collecting_iter():
                 collected: list[str] = []
                 async for chunk in orig_iterable:
+                    # Parse SSE formatted strings back to extract content
+                    if isinstance(chunk, str) and chunk.startswith("data: "):
+                        # SSE format: "data: {json}\n\n"
+                        try:
+                            json_str = chunk[
+                                6:
+                            ].strip()  # Remove "data: " prefix and whitespace
+                            data = json.loads(json_str) if json_str else {}
+                            if isinstance(data, dict):
+                                content = (
+                                    data.get("content") or data.get("data") or str(data)
+                                )
+                                collected.append(str(content))
+                            else:
+                                collected.append(str(data))
+                        except Exception:
+                            # Fallback: just collect the raw chunk
+                            collected.append(chunk)
+                    # For ServerSentEventsResponse/JSONStreamingResponse, extract content from dicts
+                    elif isinstance(chunk, dict):
+                        # Try common keys for content
+                        content = (
+                            chunk.get("content") or chunk.get("data") or str(chunk)
+                        )
+                        if isinstance(content, (bytes, bytearray)):
+                            collected.append(content.decode("utf-8", errors="replace"))
+                        else:
+                            collected.append(str(content))
                     # collect safely (bytes/str/other)
-                    if isinstance(chunk, (bytes, bytearray)):
+                    elif isinstance(chunk, (bytes, bytearray)):
                         collected.append(chunk.decode("utf-8", errors="replace"))
                     elif isinstance(chunk, str):
                         collected.append(chunk)

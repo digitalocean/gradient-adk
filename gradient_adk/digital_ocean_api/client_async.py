@@ -25,6 +25,19 @@ from .models import (
     CreateAgentWorkspaceInput,
     CreateAgentWorkspaceOutput,
     GetAgentWorkspaceDeploymentRuntimeLogsOutput,
+    ListEvaluationTestCasesByWorkspaceInput,
+    ListEvaluationTestCasesByWorkspaceOutput,
+    CreateEvaluationTestCaseInput,
+    CreateEvaluationTestCaseOutput,
+    UpdateEvaluationTestCaseInput,
+    UpdateEvaluationTestCaseOutput,
+    RunEvaluationTestCaseInput,
+    RunEvaluationTestCaseOutput,
+    CreateEvaluationDatasetInput,
+    CreateEvaluationDatasetOutput,
+    CreateEvaluationDatasetFileUploadPresignedUrlsInput,
+    CreateEvaluationDatasetFileUploadPresignedUrlsOutput,
+    GetEvaluationRunOutput,
 )
 from .errors import (
     DOAPIAuthError,
@@ -294,6 +307,186 @@ class AsyncDigitalOceanGenAI:
         data = await self._get_json(path)
         return GetAgentWorkspaceDeploymentRuntimeLogsOutput(**data)
 
+    async def list_evaluation_test_cases_by_workspace(
+        self,
+        workspace_uuid: Optional[str] = None,
+        agent_workspace_name: Optional[str] = None,
+    ) -> ListEvaluationTestCasesByWorkspaceOutput:
+        """List evaluation test cases for a workspace.
+
+        Args:
+            workspace_uuid: Workspace UUID (optional if agent_workspace_name is provided)
+            agent_workspace_name: Workspace name (optional if workspace_uuid is provided)
+
+        Returns:
+            ListEvaluationTestCasesByWorkspaceOutput containing the list of evaluation test cases
+        """
+        if not workspace_uuid and not agent_workspace_name:
+            raise ValueError(
+                "Either workspace_uuid or agent_workspace_name must be provided"
+            )
+
+        logger.debug(
+            "Listing evaluation test cases by workspace",
+            workspace_uuid=workspace_uuid,
+            agent_workspace_name=agent_workspace_name,
+        )
+
+        # Build query parameters
+        params = {}
+        if workspace_uuid:
+            params["workspace_uuid"] = workspace_uuid
+        if agent_workspace_name:
+            params["agent_workspace_name"] = agent_workspace_name
+
+        path = "/gen-ai/evaluation_test_cases"
+        if params:
+            # Construct query string
+            query_string = "&".join(f"{k}={v}" for k, v in params.items())
+            path = f"{path}?{query_string}"
+
+        data = await self._get_json(path)
+        return ListEvaluationTestCasesByWorkspaceOutput(**data)
+
+    async def create_evaluation_test_case(
+        self, input_data: CreateEvaluationTestCaseInput
+    ) -> CreateEvaluationTestCaseOutput:
+        """Create an evaluation test case.
+
+        Args:
+            input_data: The test case configuration including name, description, dataset, metrics, and workspace
+
+        Returns:
+            CreateEvaluationTestCaseOutput containing the created test case UUID
+        """
+        if not input_data.workspace_uuid and not input_data.agent_workspace_name:
+            raise ValueError(
+                "Either workspace_uuid or agent_workspace_name must be provided"
+            )
+
+        logger.debug(
+            "Creating evaluation test case",
+            name=input_data.name,
+            dataset_uuid=input_data.dataset_uuid,
+            workspace_uuid=input_data.workspace_uuid,
+            agent_workspace_name=input_data.agent_workspace_name,
+        )
+
+        path = "/gen-ai/evaluation_test_cases"
+        body = self._model_dump(input_data)
+        data = await self._post_json(path, body)
+        return CreateEvaluationTestCaseOutput(**data)
+
+    async def update_evaluation_test_case(
+        self, input_data: UpdateEvaluationTestCaseInput
+    ) -> UpdateEvaluationTestCaseOutput:
+        """Update an evaluation test case.
+
+        Args:
+            input_data: The test case updates including optional name, description, dataset, metrics, and star_metric
+
+        Returns:
+            UpdateEvaluationTestCaseOutput containing the test case UUID and new version
+        """
+        logger.debug(
+            "Updating evaluation test case",
+            test_case_uuid=input_data.test_case_uuid,
+            name=input_data.name,
+            dataset_uuid=input_data.dataset_uuid,
+        )
+
+        path = f"/gen-ai/evaluation_test_cases/{input_data.test_case_uuid}"
+        body = self._model_dump(input_data)
+        data = await self._put_json(path, body)
+        return UpdateEvaluationTestCaseOutput(**data)
+
+    async def run_evaluation_test_case(
+        self, input_data: RunEvaluationTestCaseInput
+    ) -> RunEvaluationTestCaseOutput:
+        """Run an evaluation test case.
+
+        Args:
+            input_data: The run configuration including test case UUID, agent UUIDs/deployment names, and run name
+
+        Returns:
+            RunEvaluationTestCaseOutput containing the evaluation run UUIDs
+        """
+        logger.debug(
+            "Running evaluation test case",
+            test_case_uuid=input_data.test_case_uuid,
+            run_name=input_data.run_name,
+            agent_uuids=input_data.agent_uuids,
+            agent_deployment_names=input_data.agent_deployment_names,
+        )
+
+        path = "/gen-ai/evaluation_runs"
+        body = self._model_dump(input_data)
+        data = await self._post_json(path, body)
+        return RunEvaluationTestCaseOutput(**data)
+
+    async def create_evaluation_dataset(
+        self, input_data: CreateEvaluationDatasetInput
+    ) -> CreateEvaluationDatasetOutput:
+        """Create an evaluation dataset.
+
+        Args:
+            input_data: The dataset configuration including name and file upload data source
+
+        Returns:
+            CreateEvaluationDatasetOutput containing the dataset UUID
+        """
+        logger.debug(
+            "Creating evaluation dataset",
+            name=input_data.name,
+            file_size=input_data.file_upload_dataset.size_in_bytes,
+        )
+
+        path = "/gen-ai/evaluation_datasets"
+        body = self._model_dump(input_data)
+        data = await self._post_json(path, body)
+        return CreateEvaluationDatasetOutput(**data)
+
+    async def create_evaluation_dataset_file_upload_presigned_urls(
+        self, input_data: CreateEvaluationDatasetFileUploadPresignedUrlsInput
+    ) -> CreateEvaluationDatasetFileUploadPresignedUrlsOutput:
+        """Create presigned URLs for uploading evaluation dataset files.
+
+        Args:
+            input_data: The file metadata for which to generate presigned URLs
+
+        Returns:
+            CreateEvaluationDatasetFileUploadPresignedUrlsOutput containing the presigned URLs and request ID
+        """
+        logger.debug(
+            "Creating evaluation dataset file upload presigned URLs",
+            file_count=len(input_data.files),
+        )
+
+        path = "/gen-ai/evaluation_datasets/file_upload_presigned_urls"
+        body = self._model_dump(input_data)
+        data = await self._post_json(path, body)
+        return CreateEvaluationDatasetFileUploadPresignedUrlsOutput(**data)
+
+    async def get_evaluation_run(
+        self, evaluation_run_uuid: str
+    ) -> GetEvaluationRunOutput:
+        """Get evaluation run details by UUID.
+
+        Args:
+            evaluation_run_uuid: The evaluation run UUID
+
+        Returns:
+            GetEvaluationRunOutput containing the evaluation run details
+        """
+        logger.debug(
+            "Getting evaluation run",
+            evaluation_run_uuid=evaluation_run_uuid,
+        )
+
+        path = f"/gen-ai/evaluation_runs/{evaluation_run_uuid}"
+        data = await self._get_json(path)
+        return GetEvaluationRunOutput(**data)
+
     @staticmethod
     def _model_dump(model: BaseModel) -> dict:
         try:
@@ -376,6 +569,63 @@ class AsyncDigitalOceanGenAI:
                 last_exc = e
                 if attempt > self.max_retries:
                     raise DOAPINetworkError(f"Network error on POST {path}: {e}") from e
+                await async_backoff_sleep(attempt)
+                continue
+
+            status = resp.status_code
+            text = resp.text or ""
+            payload = None
+            try:
+                if text.strip():
+                    payload = resp.json()
+            except json.JSONDecodeError:
+                payload = None
+
+            if 200 <= status < 300:
+                return payload
+
+            # Retryable?
+            if status in self.retry_statuses and attempt < self.max_retries:
+                retry_after_s = None
+                ra = resp.headers.get("Retry-After")
+                if ra:
+                    try:
+                        retry_after_s = float(ra)
+                    except ValueError:
+                        retry_after_s = None
+                await async_backoff_sleep(attempt, retry_after=retry_after_s)
+                continue
+
+            # Non-retryable or out of retries, raise typed errors
+            message = self._extract_error_message(payload) or f"HTTP {status}"
+            if status in (401, 403):
+                raise DOAPIAuthError(message, status_code=status, payload=payload)
+            if status == 429:
+                raise DOAPIRateLimitError(message, status_code=status, payload=payload)
+            if 400 <= status < 500:
+                raise DOAPIClientError(message, status_code=status, payload=payload)
+            if 500 <= status < 600:
+                raise DOAPIServerError(message, status_code=status, payload=payload)
+
+            raise DOAPIError(message, status_code=status, payload=payload)
+
+    async def _put_json(self, path: str, body: Dict[str, Any]) -> Optional[dict]:
+        attempt = 0
+        last_exc: Exception | None = None
+
+        while True:
+            attempt += 1
+            try:
+                resp = await self._client.put(path, json=body)
+            except (
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.WriteError,
+                httpx.TimeoutException,
+            ) as e:
+                last_exc = e
+                if attempt > self.max_retries:
+                    raise DOAPINetworkError(f"Network error on PUT {path}: {e}") from e
                 await async_backoff_sleep(attempt)
                 continue
 

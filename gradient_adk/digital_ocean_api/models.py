@@ -307,7 +307,9 @@ class FilePresignedUrlResponse(BaseModel):
     object_key: str = Field(
         ..., description="The unique object key to store the file as"
     )
-    original_file_name: str = Field(..., description="The original file name")
+    original_file_name: Optional[str] = Field(
+        None, description="The original file name"
+    )
     presigned_url: str = Field(
         ...,
         description="The actual presigned URL the client can use to upload the file directly",
@@ -453,3 +455,410 @@ class GetAgentWorkspaceDeploymentRuntimeLogsOutput(BaseModel):
     model_config = ConfigDict(populate_by_name=True, extra="forbid")
 
     live_url: str = Field(..., description="URL for live logs")
+
+
+class StarMetric(BaseModel):
+    """
+    Represents a star metric for evaluations.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    metric_uuid: str = Field(..., description="UUID of the metric")
+    name: str = Field(..., description="Name of the metric")
+    success_threshold_pct: Optional[int] = Field(
+        None,
+        description="The success threshold percentage (0-100) - deprecated",
+        deprecated=True,
+    )
+    success_threshold: Optional[float] = Field(
+        None,
+        description="The success threshold value the metric must reach",
+    )
+
+
+class EvaluationMetric(BaseModel):
+    """
+    Represents an evaluation metric.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    metric_uuid: str = Field(..., description="UUID of the metric")
+    metric_name: str = Field(..., description="Name of the metric")
+    category: str = Field(..., description="Category of the metric")
+    description: Optional[str] = Field(None, description="Description of the metric")
+    metric_type: Optional[str] = Field(None, description="Type of the metric")
+    metric_value_type: Optional[str] = Field(
+        None, description="Value type of the metric"
+    )
+    range_min: Optional[int] = Field(None, description="Minimum range value")
+    range_max: Optional[int] = Field(None, description="Maximum range value")
+    metric_rank: Optional[int] = Field(None, description="Rank of the metric")
+    is_metric_goal: Optional[bool] = Field(
+        None, description="Whether this is a goal metric"
+    )
+
+
+class EvaluationDataset(BaseModel):
+    """
+    Represents an evaluation dataset.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    dataset_uuid: str = Field(..., description="UUID of the dataset")
+    dataset_name: str = Field(..., description="Name of the dataset")
+    row_count: Optional[int] = Field(None, description="Number of rows in the dataset")
+    has_ground_truth: Optional[bool] = Field(
+        None, description="Does the dataset have a ground truth column?"
+    )
+    file_size: Optional[int] = Field(
+        None, description="The size of the dataset uploaded file in bytes"
+    )
+    created_at: datetime = Field(..., description="Time created at (RFC3339 timestamp)")
+
+
+class EvaluationTestCase(BaseModel):
+    """
+    Represents an evaluation test case.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    test_case_uuid: str = Field(..., description="UUID of the test case")
+    name: str = Field(..., description="Name of the test case")
+    description: Optional[str] = Field(None, description="Description of the test case")
+    version: int = Field(..., description="Version number")
+    metrics: List[EvaluationMetric] = Field(
+        default_factory=list, description="Evaluation metrics"
+    )
+    star_metric: Optional[StarMetric] = Field(
+        None, description="Star metric for the evaluation"
+    )
+    total_runs: Optional[int] = Field(None, description="Total number of runs")
+    latest_version_number_of_runs: Optional[int] = Field(
+        None, description="Number of runs for the latest version"
+    )
+    updated_by_user_id: int = Field(..., description="ID of user who last updated")
+    updated_by_user_email: Optional[str] = Field(
+        None, description="Email of user who last updated"
+    )
+    created_by_user_email: Optional[str] = Field(
+        None, description="Email of user who created"
+    )
+    created_by_user_id: int = Field(..., description="ID of user who created")
+    created_at: datetime = Field(
+        ..., description="Creation date/time (RFC3339 timestamp)"
+    )
+    updated_at: datetime = Field(
+        ..., description="Last modified date/time (RFC3339 timestamp)"
+    )
+    archived_at: Optional[datetime] = Field(
+        None, description="Archived date/time (RFC3339 timestamp)"
+    )
+    dataset: Optional[EvaluationDataset] = Field(
+        None, description="The evaluation dataset information"
+    )
+
+
+class ListEvaluationTestCasesByWorkspaceInput(BaseModel):
+    """
+    Input for listing evaluation test cases by workspace.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    workspace_uuid: Optional[str] = Field(
+        None,
+        description="Workspace UUID (optional if agent_workspace_name is provided)",
+    )
+    agent_workspace_name: Optional[str] = Field(
+        None, description="Workspace name (optional if workspace_uuid is provided)"
+    )
+
+
+class ListEvaluationTestCasesByWorkspaceOutput(BaseModel):
+    """
+    Response for listing evaluation test cases by workspace.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    evaluation_test_cases: List[EvaluationTestCase] = Field(
+        default_factory=list, description="List of evaluation test cases"
+    )
+
+
+class CreateEvaluationTestCaseInput(BaseModel):
+    """
+    Input for creating an evaluation test case.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(..., description="Name of the test case")
+    description: str = Field(..., description="Description of the test case")
+    dataset_uuid: str = Field(
+        ..., description="Dataset against which the test case is executed"
+    )
+    metrics: List[str] = Field(
+        default_factory=list, description="Full metric list to use for evaluation"
+    )
+    star_metric: StarMetric = Field(..., description="Star metric for test case")
+    workspace_uuid: Optional[str] = Field(
+        None,
+        description="The workspace UUID (optional if agent_workspace_name provided)",
+    )
+    agent_workspace_name: Optional[str] = Field(
+        None, description="The workspace name (optional if workspace_uuid provided)"
+    )
+
+
+class CreateEvaluationTestCaseOutput(BaseModel):
+    """
+    Response for creating an evaluation test case.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    test_case_uuid: str = Field(..., description="Test case UUID")
+
+
+class UpdateEvaluationTestCaseInput(BaseModel):
+    """
+    Input for updating an evaluation test case.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    test_case_uuid: str = Field(..., description="Test case UUID to update")
+    name: Optional[str] = Field(None, description="Name of the test case")
+    description: Optional[str] = Field(None, description="Description of the test case")
+    dataset_uuid: Optional[str] = Field(
+        None, description="Dataset against which the test case is executed"
+    )
+    metrics: Optional[List[str]] = Field(
+        None, description="Full metric list to use for evaluation"
+    )
+    star_metric: Optional[StarMetric] = Field(
+        None, description="Optional star metric to update"
+    )
+
+
+class UpdateEvaluationTestCaseOutput(BaseModel):
+    """
+    Response for updating an evaluation test case.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    test_case_uuid: str = Field(..., description="Test case UUID")
+    version: int = Field(..., description="The new version of the test case")
+
+
+class RunEvaluationTestCaseInput(BaseModel):
+    """
+    Input for running an evaluation test case.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    test_case_uuid: str = Field(..., description="Test case UUID to run")
+    agent_uuids: List[str] = Field(
+        default_factory=list,
+        description="Agent UUIDs to run the test case against (legacy agents)",
+    )
+    agent_deployment_names: List[str] = Field(
+        default_factory=list,
+        description="Agent deployment names to run the test case against (ADK agent workspaces)",
+    )
+    run_name: str = Field(..., description="The name of the run")
+
+
+class RunEvaluationTestCaseOutput(BaseModel):
+    """
+    Response for running an evaluation test case.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    evaluation_run_uuids: List[str] = Field(
+        default_factory=list, description="Evaluation run UUIDs"
+    )
+
+
+class FileUploadDataSource(BaseModel):
+    """
+    Represents a file upload data source.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    original_file_name: str = Field(..., description="The original file name")
+    stored_object_key: str = Field(
+        ..., description="The object key the file was stored as"
+    )
+    size_in_bytes: int = Field(..., description="The size of the file in bytes")
+
+
+class CreateEvaluationDatasetInput(BaseModel):
+    """
+    Input for creating an evaluation dataset.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    name: str = Field(..., description="The name of the agent evaluation dataset")
+    file_upload_dataset: FileUploadDataSource = Field(
+        ..., description="File to upload as the agent evaluation dataset"
+    )
+
+
+class CreateEvaluationDatasetOutput(BaseModel):
+    """
+    Response for creating an evaluation dataset.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    evaluation_dataset_uuid: str = Field(
+        ..., description="Dataset UUID", alias="dataset_uuid"
+    )
+
+
+class CreateEvaluationDatasetFileUploadPresignedUrlsInput(BaseModel):
+    """
+    Input for creating evaluation dataset file upload presigned URLs.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    files: List[PresignedUrlFile] = Field(
+        ..., description="A list of files to generate presigned URLs for"
+    )
+
+
+class CreateEvaluationDatasetFileUploadPresignedUrlsOutput(BaseModel):
+    """
+    Response for creating evaluation dataset file upload presigned URLs.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    request_id: str = Field(
+        ..., description="The ID generated for the request for Presigned URLs"
+    )
+    uploads: List[FilePresignedUrlResponse] = Field(
+        ...,
+        description="A list of generated presigned URLs and object keys, one per file",
+    )
+
+
+class EvaluationMetricValueType(str, Enum):
+    """Metric value type enumeration."""
+
+    EVALUATION_METRIC_VALUE_TYPE_UNKNOWN = "EVALUATION_METRIC_VALUE_TYPE_UNKNOWN"
+    EVALUATION_METRIC_VALUE_TYPE_NUMBER = "EVALUATION_METRIC_VALUE_TYPE_NUMBER"
+    EVALUATION_METRIC_VALUE_TYPE_STRING = "EVALUATION_METRIC_VALUE_TYPE_STRING"
+
+
+class EvaluationMetricResult(BaseModel):
+    """
+    Result of an evaluation metric.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    metric_name: str = Field(..., description="Metric name")
+    number_value: Optional[float] = Field(
+        None, description="The value of the metric as a number"
+    )
+    string_value: Optional[str] = Field(
+        None, description="The value of the metric as a string"
+    )
+    reasoning: Optional[str] = Field(None, description="Reasoning of the metric result")
+    error_description: Optional[str] = Field(
+        None, description="Error description if the metric could not be calculated"
+    )
+    metric_value_type: Optional[EvaluationMetricValueType] = Field(
+        None, description="The type of the metric"
+    )
+
+
+class EvaluationRunStatus(str, Enum):
+    """Evaluation run status enumeration."""
+
+    EVALUATION_RUN_STATUS_UNKNOWN = "EVALUATION_RUN_STATUS_UNKNOWN"
+    EVALUATION_RUN_STATUS_QUEUED = "EVALUATION_RUN_STATUS_QUEUED"
+    EVALUATION_RUN_STATUS_RUNNING = "EVALUATION_RUN_STATUS_RUNNING"
+    EVALUATION_RUN_STATUS_COMPLETED = "EVALUATION_RUN_STATUS_COMPLETED"
+    EVALUATION_RUN_STATUS_FAILED = "EVALUATION_RUN_STATUS_FAILED"
+    EVALUATION_RUN_STATUS_CANCELLED = "EVALUATION_RUN_STATUS_CANCELLED"
+
+
+class EvaluationRun(BaseModel):
+    """
+    Represents an evaluation run.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    evaluation_run_uuid: str = Field(..., description="Evaluation run UUID")
+    test_case_uuid: str = Field(..., description="Test-case UUID")
+    test_case_version: int = Field(..., description="Test-case-version")
+    test_case_name: str = Field(..., description="Test case name")
+    test_case_description: Optional[str] = Field(
+        None, description="Test case description"
+    )
+    agent_uuid: str = Field(..., description="Agent UUID")
+    agent_version_hash: Optional[str] = Field(None, description="version hash")
+    run_name: str = Field(..., description="Run name")
+    status: EvaluationRunStatus = Field(..., description="Run status")
+    started_at: Optional[datetime] = Field(
+        None, description="Run start time (RFC3339 timestamp)"
+    )
+    finished_at: Optional[datetime] = Field(
+        None, description="Run end time (RFC3339 timestamp)"
+    )
+    pass_status: Optional[bool] = Field(
+        None,
+        description="The pass status of the evaluation run based on the star metric",
+    )
+    star_metric_result: Optional[EvaluationMetricResult] = Field(
+        None, description="The result of the star metric"
+    )
+    run_level_metric_results: List[EvaluationMetricResult] = Field(
+        default_factory=list, description="Run level metric results"
+    )
+    agent_name: Optional[str] = Field(None, description="agent name")
+    agent_workspace_uuid: Optional[str] = Field(
+        None, description="agent workspace uuid"
+    )
+    evaluation_test_case_workspace_uuid: Optional[str] = Field(
+        None, description="evaluation test case workspace uuid"
+    )
+    agent_deleted: Optional[bool] = Field(None, description="whether agent is deleted")
+    error_description: Optional[str] = Field(None, description="The error description")
+    created_by_user_email: Optional[str] = Field(
+        None, description="Email of user who created"
+    )
+    created_by_user_id: Optional[int] = Field(
+        None, description="ID of user who created"
+    )
+    queued_at: Optional[datetime] = Field(
+        None, description="Run queued time (RFC3339 timestamp)"
+    )
+    agent_deployment_name: Optional[str] = Field(
+        None, description="The agent deployment name"
+    )
+
+
+class GetEvaluationRunOutput(BaseModel):
+    """
+    Response for getting an evaluation run.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    evaluation_run: EvaluationRun = Field(..., description="The evaluation run")

@@ -52,9 +52,9 @@ class YamlAgentConfigManager(AgentConfigManager):
         if interactive:
             if agent_name is None:
                 agent_name = self._prompt_with_validation(
-                    "Agent name",
+                    "Agent workspace name",
                     self._validate_name,
-                    "Agent name can only contain alphanumeric characters, hyphens, and underscores",
+                    "Agent workspace name can only contain alphanumeric characters, hyphens, and underscores",
                 )
             if agent_environment is None:
                 agent_environment = self._prompt_with_validation(
@@ -70,7 +70,7 @@ class YamlAgentConfigManager(AgentConfigManager):
         else:
             if not all([agent_name, agent_environment, entrypoint_file]):
                 typer.echo(
-                    "Error: --agent-name, --agent-environment, and --entrypoint-file are required in non-interactive mode.",
+                    "Error: --agent-workspace-name, --agent-deployment-name, and --entrypoint-file are required in non-interactive mode.",
                     err=True,
                 )
                 raise typer.Exit(2)
@@ -78,7 +78,7 @@ class YamlAgentConfigManager(AgentConfigManager):
             # Validate names in non-interactive mode
             if not self._validate_name(agent_name):
                 typer.echo(
-                    f"Error: Agent name '{agent_name}' is invalid. "
+                    f"Error: Agent workspace name '{agent_name}' is invalid. "
                     "It can only contain alphanumeric characters, hyphens, and underscores.",
                     err=True,
                 )
@@ -86,7 +86,7 @@ class YamlAgentConfigManager(AgentConfigManager):
 
             if not self._validate_name(agent_environment):
                 typer.echo(
-                    f"Error: Deployment name '{agent_environment}' is invalid. "
+                    f"Error: Agent deployment name '{agent_environment}' is invalid. "
                     "It can only contain alphanumeric characters, hyphens, and underscores.",
                     err=True,
                 )
@@ -172,8 +172,8 @@ class YamlAgentConfigManager(AgentConfigManager):
             with open(self.config_file, "w") as f:
                 yaml.safe_dump(config, f, default_flow_style=False)
             typer.echo(f"✅ Configuration saved to {self.config_file}")
-            typer.echo(f"  Agent name: {agent_name}")
-            typer.echo(f"  Environment: {agent_environment}")
+            typer.echo(f"  Agent workspace name: {agent_name}")
+            typer.echo(f"  Agent deployment name: {agent_environment}")
             typer.echo(f"  Entrypoint: {entrypoint_file}")
         except Exception as e:
             typer.echo(f"Error writing configuration file: {e}", err=True)

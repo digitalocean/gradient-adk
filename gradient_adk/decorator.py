@@ -81,19 +81,26 @@ def entrypoint(func: Callable) -> Callable:
                         yield chunk
                     if tr:
                         try:
-                            tr.on_request_end(outputs=None, error=None)
+                            # Don't call on_request_end here - it was already called
+                            # and the tracker is collecting the stream
+                            pass
                         except Exception:
                             pass
                 except Exception as e:
                     if tr:
                         try:
-                            tr.on_request_end(outputs=None, error=str(e))
+                            # Update error if streaming fails
+                            tr._req["error"] = str(e)
                         except Exception:
                             pass
                     raise
 
+            # Let the tracker wrap and collect the stream
+            if tr:
+                tr.on_request_end(outputs=result, error=None)
+
             return FastAPIStreamingResponse(
-                _wrap(result.content),
+                result.content,  # The tracker has already wrapped this
                 media_type=result.media_type,
                 headers=result.headers,
             )

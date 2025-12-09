@@ -1,20 +1,37 @@
 from __future__ import annotations
 import threading
-from typing import Set
+import json
+from typing import Set, List, Dict, Any, Optional
 import httpx, requests
+
+
+class CapturedRequest:
+    """Represents a captured HTTP request/response."""
+
+    def __init__(
+        self,
+        request_payload: Optional[Dict[str, Any]] = None,
+        response_payload: Optional[Dict[str, Any]] = None,
+    ):
+        self.request_payload = request_payload
+        self.response_payload = response_payload
 
 
 class NetworkInterceptor:
     """
-    Minimal, counter-only interceptor.
+    Generic network interceptor.
     - Tracks endpoint patterns to watch
-    - Increments a monotonic counter on every matching request (duplicates allowed)
+    - Increments a monotonic counter on every matching request
+    - Captures request/response payloads for tracked endpoints
     - Exposes snapshot_token() and hits_since(token)
     """
 
     def __init__(self):
         self._tracked_endpoints: Set[str] = set()
         self._hit_count: int = 0
+        self._captured_requests: List[CapturedRequest] = (
+            []
+        )  # Capture request/response pairs
         self._lock = threading.Lock()
         self._active = False
         # originals
@@ -42,10 +59,19 @@ class NetworkInterceptor:
         with self._lock:
             return max(0, self._hit_count - token)
 
+    def get_captured_requests_since(self, token: int) -> List[CapturedRequest]:
+        """Get all captured requests that happened since the given token."""
+        with self._lock:
+            # Return captured requests from index token onwards
+            if token < len(self._captured_requests):
+                return self._captured_requests[token:]
+            return []
+
     def clear_hits(self) -> None:
         """Optional: reset the counter (e.g., at request start)."""
         with self._lock:
             self._hit_count = 0
+            self._captured_requests.clear()
 
     def start_intercepting(self) -> None:
         if self._active:
@@ -60,36 +86,84 @@ class NetworkInterceptor:
 
         # patch httpx (async)
         async def intercepted_httpx_send(self_client, request, **kwargs):
-            _global_interceptor._record_request(str(request.url))
-            return await _global_interceptor._original_httpx_send(
+            url_str = str(request.url)
+            request_payload = _global_interceptor._extract_request_payload(request)
+            _global_interceptor._record_request(url_str, request_payload)
+
+            response = await _global_interceptor._original_httpx_send(
                 self_client, request, **kwargs
             )
 
+            response_payload = await _global_interceptor._extract_response_payload(
+                response
+            )
+            _global_interceptor._record_response(url_str, response_payload)
+
+            return response
+
         def intercepted_httpx_request(self_client, method, url, **kwargs):
-            _global_interceptor._record_request(str(url))
-            return _global_interceptor._original_httpx_request(
+            url_str = str(url)
+            request_payload = _global_interceptor._extract_request_payload_from_kwargs(
+                kwargs
+            )
+            _global_interceptor._record_request(url_str, request_payload)
+
+            response = _global_interceptor._original_httpx_request(
                 self_client, method, url, **kwargs
             )
+
+            # Note: For async request method, we can't easily await response content
+            # The send method is more reliable for capturing responses
+            return response
 
         # patch httpx (sync)
         def intercepted_httpx_sync_send(self_client, request, **kwargs):
-            _global_interceptor._record_request(str(request.url))
-            return _global_interceptor._original_httpx_sync_send(
+            url_str = str(request.url)
+            request_payload = _global_interceptor._extract_request_payload(request)
+            _global_interceptor._record_request(url_str, request_payload)
+
+            response = _global_interceptor._original_httpx_sync_send(
                 self_client, request, **kwargs
             )
 
+            response_payload = _global_interceptor._extract_response_payload_sync(
+                response
+            )
+            _global_interceptor._record_response(url_str, response_payload)
+
+            return response
+
         def intercepted_httpx_sync_request(self_client, method, url, **kwargs):
-            _global_interceptor._record_request(str(url))
-            return _global_interceptor._original_httpx_sync_request(
+            url_str = str(url)
+            request_payload = _global_interceptor._extract_request_payload_from_kwargs(
+                kwargs
+            )
+            _global_interceptor._record_request(url_str, request_payload)
+
+            response = _global_interceptor._original_httpx_sync_request(
                 self_client, method, url, **kwargs
             )
 
+            return response
+
         # patch requests
         def intercepted_requests_request(self_session, method, url, **kwargs):
-            _global_interceptor._record_request(str(url))
-            return _global_interceptor._original_requests_request(
+            url_str = str(url)
+            request_payload = _global_interceptor._extract_request_payload_from_kwargs(
+                kwargs
+            )
+            _global_interceptor._record_request(url_str, request_payload)
+
+            response = _global_interceptor._original_requests_request(
                 self_session, method, url, **kwargs
             )
+
+            response_payload = (
+                _global_interceptor._extract_response_payload_from_requests(response)
+            )
+            _global_interceptor._record_response(url_str, response_payload)
+
+            return response
 
         httpx.AsyncClient.send = intercepted_httpx_send
         httpx.AsyncClient.request = intercepted_httpx_request
@@ -116,12 +190,93 @@ class NetworkInterceptor:
         self._active = False
 
     # ---- internal ----
-    def _record_request(self, url: str) -> None:
+    def _is_tracked_url(self, url: str) -> bool:
+        """Check if URL matches any tracked endpoint pattern."""
+        for pattern in self._tracked_endpoints:
+            if pattern in url:
+                return True
+        return False
+
+    def _record_request(
+        self, url: str, request_payload: Optional[Dict[str, Any]] = None
+    ) -> None:
         with self._lock:
-            for pattern in self._tracked_endpoints:
-                if pattern in url:
-                    self._hit_count += 1
-                    break
+            if self._is_tracked_url(url):
+                self._hit_count += 1
+                # Create a new captured request record
+                self._captured_requests.append(
+                    CapturedRequest(request_payload=request_payload)
+                )
+
+    def _record_response(
+        self, url: str, response_payload: Optional[Dict[str, Any]] = None
+    ) -> None:
+        with self._lock:
+            if self._is_tracked_url(url) and self._captured_requests:
+                # Update the most recent captured request with response
+                self._captured_requests[-1].response_payload = response_payload
+
+    def _extract_request_payload(self, request) -> Optional[Dict[str, Any]]:
+        """Extract JSON payload from httpx Request object."""
+        try:
+            if hasattr(request, "content"):
+                content = request.content
+                if isinstance(content, bytes):
+                    return json.loads(content.decode("utf-8"))
+        except Exception:
+            pass
+        return None
+
+    def _extract_request_payload_from_kwargs(
+        self, kwargs: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """Extract JSON payload from request kwargs."""
+        try:
+            if "json" in kwargs:
+                return kwargs["json"]
+            if "data" in kwargs:
+                data = kwargs["data"]
+                if isinstance(data, (str, bytes)):
+                    return json.loads(data)
+                return data
+            if "content" in kwargs:
+                content = kwargs["content"]
+                if isinstance(content, bytes):
+                    return json.loads(content.decode("utf-8"))
+        except Exception:
+            pass
+        return None
+
+    async def _extract_response_payload(self, response) -> Optional[Dict[str, Any]]:
+        """Extract JSON payload from httpx async Response object."""
+        try:
+            # Read the response content
+            content = await response.aread()
+            if content:
+                return json.loads(content.decode("utf-8"))
+        except Exception:
+            pass
+        return None
+
+    def _extract_response_payload_sync(self, response) -> Optional[Dict[str, Any]]:
+        """Extract JSON payload from httpx sync Response object."""
+        try:
+            content = response.read()
+            if content:
+                return json.loads(content.decode("utf-8"))
+        except Exception:
+            pass
+        return None
+
+    def _extract_response_payload_from_requests(
+        self, response
+    ) -> Optional[Dict[str, Any]]:
+        """Extract JSON payload from requests Response object."""
+        try:
+            return response.json()
+        except Exception:
+            pass
+        return None
 
 
 # Global instance

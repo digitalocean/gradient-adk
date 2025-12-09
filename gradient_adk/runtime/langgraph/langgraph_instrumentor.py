@@ -232,6 +232,19 @@ def _had_hits_since(intr, token) -> bool:
         return False
 
 
+def _get_captured_payloads(intr, token) -> tuple:
+    """Get captured API request/response payloads if available (e.g., for LLM calls)."""
+    try:
+        captured = intr.get_captured_requests_since(token)
+        if captured:
+            # Use the first captured request (most common case)
+            call = captured[0]
+            return call.request_payload, call.response_payload
+    except Exception:
+        pass
+    return None, None
+
+
 class LangGraphInstrumentor:
     """Wraps LangGraph nodes with tracing."""
 
@@ -263,14 +276,40 @@ class LangGraphInstrumentor:
             intr,
             tok,
         ):
-            out_payload = _canonical_output(inputs_snapshot, a, kw, ret)
+            # Check if this node made any tracked API calls (e.g., LLM inference)
             if _had_hits_since(intr, tok):
                 _ensure_meta(rec)["is_llm_call"] = True
+
+                # Try to get actual API request/response payloads (for LLM calls)
+                api_request, api_response = _get_captured_payloads(intr, tok)
+
+                if api_request or api_response:
+                    # Use actual API payloads instead of function args
+                    # Update the inputs to the actual API request (e.g., LLM messages)
+                    if api_request:
+                        rec.inputs = _freeze(api_request)
+
+                    # Use actual API response as output (e.g., LLM completion)
+                    if api_response:
+                        out_payload = _freeze(api_response)
+                    else:
+                        out_payload = _canonical_output(inputs_snapshot, a, kw, ret)
+                else:
+                    out_payload = _canonical_output(inputs_snapshot, a, kw, ret)
+            else:
+                out_payload = _canonical_output(inputs_snapshot, a, kw, ret)
+
             t.on_node_end(rec, out_payload)
 
         def _finish_err(rec: NodeExecution, intr, tok, e: BaseException):
             if _had_hits_since(intr, tok):
                 _ensure_meta(rec)["is_llm_call"] = True
+
+                # Try to get actual API request payload even on error
+                api_request, _ = _get_captured_payloads(intr, tok)
+                if api_request:
+                    rec.inputs = _freeze(api_request)
+
             t.on_node_error(rec, e)
 
         def _wrap_async_func(node_name: str, func):
