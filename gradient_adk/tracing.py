@@ -109,7 +109,7 @@ def _freeze(obj: Any, max_depth: int = 3, max_items: int = 100) -> Any:
     return repr(obj)
 
 
-def _snapshot_args_kwargs(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> dict:
+def _snapshot_args_kwargs(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> Any:
     """Create a snapshot of function arguments."""
     try:
         args_copy = deepcopy(args)
@@ -117,15 +117,27 @@ def _snapshot_args_kwargs(args: Tuple[Any, ...], kwargs: Dict[str, Any]) -> dict
     except Exception:
         args_copy, kwargs_copy = args, kwargs
 
-    return {"args": _freeze(args_copy), "kwargs": _freeze(kwargs_copy)}
+    # If there's exactly one arg and no kwargs, return just that arg
+    if len(args_copy) == 1 and not kwargs_copy:
+        return _freeze(args_copy[0])
+
+    # If there are kwargs but no args, return just the kwargs
+    if not args_copy and kwargs_copy:
+        return _freeze(kwargs_copy)
+
+    # If there are multiple args or both args and kwargs, return a dict
+    if args_copy and kwargs_copy:
+        return {"args": _freeze(args_copy), "kwargs": _freeze(kwargs_copy)}
+    elif len(args_copy) > 1:
+        return _freeze(args_copy)
+
+    # Fallback
+    return _freeze(args_copy)
 
 
-def _snapshot_output(result: Any) -> dict:
+def _snapshot_output(result: Any) -> Any:
     """Create a snapshot of function output."""
-    if isinstance(result, dict):
-        return _freeze(result)
-    else:
-        return {"return": _freeze(result)}
+    return _freeze(result)
 
 
 def _ensure_meta(rec: NodeExecution) -> dict:
@@ -140,7 +152,7 @@ def _ensure_meta(rec: NodeExecution) -> dict:
     return md
 
 
-def _create_span(span_name: str, inputs: dict) -> NodeExecution:
+def _create_span(span_name: str, inputs: Any) -> NodeExecution:
     """Create a new span execution record."""
     return NodeExecution(
         node_id=str(uuid.uuid4()),

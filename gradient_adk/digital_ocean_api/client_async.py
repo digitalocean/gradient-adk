@@ -8,6 +8,7 @@ from pydantic import BaseModel, ValidationError
 from gradient_adk.logging import get_logger
 from .models import (
     CreateTracesInput,
+    CreateTracesOutput,
     EmptyResponse,
     GetDefaultProjectResponse,
     TracingServiceJWTOutput,
@@ -90,14 +91,11 @@ class AsyncDigitalOceanGenAI:
         await self.aclose()
         return False
 
-    async def create_traces(self, req: CreateTracesInput) -> EmptyResponse:
+    async def create_traces(self, req: CreateTracesInput) -> CreateTracesOutput:
         body = self._model_dump(req)
         logger.debug("Creating traces", request_body=body)
         data = await self._post_json("/gen-ai/traces", body)
-        # Always return empty response until create_traces starts returning data
-        if not data:
-            return EmptyResponse()
-        return EmptyResponse()
+        return CreateTracesOutput(**data)
 
     async def get_default_project(self) -> GetDefaultProjectResponse:
         """Get the default project for the authenticated user."""

@@ -45,12 +45,15 @@ def entrypoint(func: Callable) -> Callable:
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
+        # Check if this is an evaluation request
+        is_evaluation = "evaluation-id" in req.headers
+
         # Start request in tracker (if available)
         tr = None
         try:
             tr = get_tracker()
             if tr:
-                tr.on_request_start(func.__name__, body)
+                tr.on_request_start(func.__name__, body, is_evaluation=is_evaluation)
         except Exception:
             pass
 
@@ -96,11 +99,25 @@ def entrypoint(func: Callable) -> Callable:
             )
 
         # Non-streaming
+        trace_id = None
         if tr:
             try:
+                # Always call on_request_end to set outputs
                 tr.on_request_end(outputs=result, error=None)
+                # For evaluations, await the trace submission to get trace_id
+                if is_evaluation:
+                    trace_id = await tr.submit_and_get_trace_id()
             except Exception:
                 pass
+
+        # Add trace_id to response headers if available
+        if trace_id:
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(
+                content=result, headers={"X-Gradient-Trace-Id": trace_id}
+            )
+
         return result
 
     @app.get("/health")

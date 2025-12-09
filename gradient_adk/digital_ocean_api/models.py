@@ -57,6 +57,19 @@ class CreateTracesInput(BaseModel):
     agent_workspace_name: str
 
 
+class CreateTracesOutput(BaseModel):
+    """
+    Response for creating traces.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+
+    trace_uuids: List[str] = Field(
+        default_factory=list, description="Trace UUIDs created"
+    )
+    session_id: Optional[str] = Field(None, description="Session ID")
+
+
 class Project(BaseModel):
     """
     Represents a DigitalOcean project.

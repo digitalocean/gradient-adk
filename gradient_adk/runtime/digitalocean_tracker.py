@@ -42,11 +42,15 @@ class DigitalOceanTracesTracker:
         self._live: dict[str, NodeExecution] = {}
         self._done: List[NodeExecution] = []
         self._inflight: set[asyncio.Task] = set()
+        self._is_evaluation: bool = False
 
-    def on_request_start(self, entrypoint: str, inputs: Dict[str, Any]) -> None:
+    def on_request_start(
+        self, entrypoint: str, inputs: Dict[str, Any], is_evaluation: bool = False
+    ) -> None:
         # NEW: reset buffers per request
         self._live.clear()
         self._done.clear()
+        self._is_evaluation = is_evaluation
         self._req = {"entrypoint": entrypoint, "inputs": inputs}
 
     def _as_async_iterable_and_setter(
@@ -96,23 +100,34 @@ class DigitalOceanTracesTracker:
             set_iterable(collecting_iter())
             return  # important: don't submit yet
 
-        # Non-streaming
+        # Non-streaming - always fire-and-forget
+        # For evaluation mode, decorator will call submit_and_get_trace_id() directly
         self._req["outputs"] = outputs
-        try:
-            loop = asyncio.get_running_loop()
-            task = loop.create_task(self._submit())
-            self._inflight.add(task)
 
-            def _done_cb(t: asyncio.Task) -> None:
-                self._inflight.discard(t)
-                try:
-                    t.result()
-                except Exception:
-                    pass
+        if not self._is_evaluation:
+            # Regular fire-and-forget for non-evaluation requests
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(self._submit())
+                self._inflight.add(task)
 
-            task.add_done_callback(_done_cb)
-        except RuntimeError:
-            asyncio.run(self._submit())
+                def _done_cb(t: asyncio.Task) -> None:
+                    self._inflight.discard(t)
+                    try:
+                        t.result()
+                    except Exception:
+                        pass
+
+                task.add_done_callback(_done_cb)
+            except RuntimeError:
+                asyncio.run(self._submit())
+
+    async def submit_and_get_trace_id(self) -> Optional[str]:
+        """
+        Submit the trace and return the trace_id.
+        Only call this for evaluation requests after on_request_end has been called.
+        """
+        return await self._submit()
 
     def on_node_start(self, node: NodeExecution) -> None:
         self._live[node.node_id] = node
@@ -135,7 +150,7 @@ class DigitalOceanTracesTracker:
             self._inflight.clear()
         await self._client.aclose()
 
-    async def _submit(self) -> None:
+    async def _submit(self) -> Optional[str]:
         try:
             trace = self._build_trace()
             req = CreateTracesInput(
@@ -143,10 +158,14 @@ class DigitalOceanTracesTracker:
                 agent_deployment_name=self._dep,
                 traces=[trace],
             )
-            await self._client.create_traces(req)
+            result = await self._client.create_traces(req)
+            # Return first trace_uuid if available
+            if result.trace_uuids:
+                return result.trace_uuids[0]
+            return None
         except Exception as e:
             # never break user code on export errors
-            pass
+            return None
 
     def _to_span(self, ex: NodeExecution) -> Span:
         # Base payloads

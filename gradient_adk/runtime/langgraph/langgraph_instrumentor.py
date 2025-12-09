@@ -97,14 +97,30 @@ def _freeze(obj: Any, depth: int = _MAX_DEPTH) -> Any:
     return repr(obj)
 
 
-def _snapshot_args_kwargs(a: Tuple[Any, ...], kw: Dict[str, Any]) -> dict:
+def _snapshot_args_kwargs(a: Tuple[Any, ...], kw: Dict[str, Any]) -> Any:
     """Deepcopy then freeze to avoid mutation surprises."""
     try:
         a_copy = deepcopy(a)
         kw_copy = deepcopy(kw)
     except Exception:
         a_copy, kw_copy = a, kw  # best-effort
-    return {"args": _freeze(a_copy), "kwargs": _freeze(kw_copy)}
+
+    # If there's exactly one arg and no kwargs, return just that arg
+    if len(a_copy) == 1 and not kw_copy:
+        return _freeze(a_copy[0])
+
+    # If there are kwargs but no args, return just the kwargs
+    if not a_copy and kw_copy:
+        return _freeze(kw_copy)
+
+    # If there are multiple args or both args and kwargs, return a dict
+    if a_copy and kw_copy:
+        return {"args": _freeze(a_copy), "kwargs": _freeze(kw_copy)}
+    elif len(a_copy) > 1:
+        return _freeze(a_copy)
+
+    # Fallback
+    return _freeze(a_copy)
 
 
 def _diff(a: Any, b: Any, depth: int = 2) -> Any:
@@ -180,13 +196,12 @@ def _first_arg_before(before_inputs: dict) -> Optional[Any]:
 
 def _canonical_output(
     before_inputs: dict, a: Tuple[Any, ...], kw: Dict[str, Any], ret: Any
-) -> dict:
+) -> Any:
     """
-    Choose a single, compact output dict:
+    Choose a single, compact output:
       1) If ret is a mapping -> return snapshot(ret)
       2) Else if first arg is a dict and appears changed -> snapshot(first arg)
-      3) Else -> {"return": snapshot(ret)}
-    Always returns a dict (keeps Pydantic 'output must be dict' happy).
+      3) Else -> snapshot(ret)
     """
     if isinstance(ret, Mapping):
         return _freeze(ret)
@@ -198,7 +213,7 @@ def _canonical_output(
         if not isinstance(arg0_before, dict) or arg0_before != arg0_after_frozen:
             return arg0_after_frozen
 
-    return {"return": _freeze(ret)}
+    return _freeze(ret)
 
 
 def _snap():
