@@ -222,9 +222,16 @@ class DigitalOceanTracesTracker:
             return None
 
     def _to_span(self, ex: NodeExecution) -> Span:
-        # Base payloads
-        inp = ex.inputs if isinstance(ex.inputs, dict) else {"input": ex.inputs}
-        out = ex.outputs if isinstance(ex.outputs, dict) else {"output": ex.outputs}
+        # Base payloads - keep dicts as-is, wrap everything else
+        if isinstance(ex.inputs, dict):
+            inp = ex.inputs
+        else:
+            inp = {"input": ex.inputs}
+
+        if isinstance(ex.outputs, dict):
+            out = ex.outputs
+        else:
+            out = {"output": ex.outputs}
 
         # include error (if any) and matched endpoints (if present)
         if ex.error is not None:
@@ -234,12 +241,14 @@ class DigitalOceanTracesTracker:
             out = dict(out)
             out["_llm_endpoints"] = list(ex.metadata["llm_endpoints"])
 
-        # classify LLM/tool via metadata set by the instrumentor
-        span_type = (
-            TraceSpanType.TRACE_SPAN_TYPE_LLM
-            if (ex.metadata or {}).get("is_llm_call")
-            else TraceSpanType.TRACE_SPAN_TYPE_TOOL
-        )
+        # classify LLM/tool/retriever via metadata set by the instrumentor
+        metadata = ex.metadata or {}
+        if metadata.get("is_llm_call"):
+            span_type = TraceSpanType.TRACE_SPAN_TYPE_LLM
+        elif metadata.get("is_retriever_call"):
+            span_type = TraceSpanType.TRACE_SPAN_TYPE_RETRIEVER
+        else:
+            span_type = TraceSpanType.TRACE_SPAN_TYPE_TOOL
 
         return Span(
             created_at=_utc(ex.start_time),
