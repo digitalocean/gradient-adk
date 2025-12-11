@@ -132,6 +132,9 @@ def validate_agent_entrypoint(
             print(f"\n🔍 Verifying agent entrypoint has @entrypoint decorator...")
 
         # Check that the entrypoint file has the @entrypoint decorator
+        # Convert file path to module path (e.g., "agents/my_agent.py" -> "agents.my_agent")
+        module_path = entrypoint_file.replace(".py", "").replace("/", ".")
+
         check_script = f"""
 import sys
 import re
@@ -157,10 +160,12 @@ if not re.search(r'^\\s*@entrypoint\\s*$', content, re.MULTILINE):
 
 # Try to import it
 try:
-    from {entrypoint_file.replace('.py', '')} import *
+    import {module_path}
     print('✅ Entrypoint imported successfully with @entrypoint decorator')
 except Exception as e:
     print(f"ERROR: {{type(e).__name__}}: {{e}}")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 """
 
@@ -232,7 +237,6 @@ def _copy_source_files(source_dir: Path, dest_dir: Path, verbose: bool = False) 
         ".venv",
         "venv",
         "env",
-        ".env",
         "node_modules",
         ".pytest_cache",
         ".mypy_cache",
