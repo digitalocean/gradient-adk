@@ -21,7 +21,7 @@ class Span(BaseModel):
     - input/output: json
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     created_at: datetime = Field(..., description="RFC3339 timestamp")
     input: Dict[str, Any]
@@ -35,7 +35,7 @@ class Trace(BaseModel):
     Represents a complete trace.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     created_at: datetime = Field(..., description="RFC3339 timestamp")
     input: Dict[str, Any]
@@ -49,7 +49,7 @@ class CreateTracesInput(BaseModel):
     Input for creating traces.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_deployment_name: str
     session_id: Optional[str] = None
@@ -62,7 +62,7 @@ class CreateTracesOutput(BaseModel):
     Response for creating traces.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     trace_uuids: List[str] = Field(
         default_factory=list, description="Trace UUIDs created"
@@ -75,7 +75,7 @@ class Project(BaseModel):
     Represents a DigitalOcean project.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     id: str
     owner_uuid: str
@@ -94,7 +94,7 @@ class GetDefaultProjectResponse(BaseModel):
     Response for getting the default project.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     project: Project
 
@@ -104,7 +104,7 @@ class TracingServiceJWTOutput(BaseModel):
     Response for getting tracing token.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     access_token: str = Field(
         ..., description="Access token for the clickout to the tracing service"
@@ -135,7 +135,7 @@ class AgentDeploymentRelease(BaseModel):
     Represents an Agent Deployment Release.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     uuid: str = Field(..., description="Unique release id")
     status: Optional[ReleaseStatus] = Field(
@@ -167,7 +167,7 @@ class AgentLoggingConfig(BaseModel):
     Represents Agent Logging Config Details.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     galileo_project_id: str = Field(..., description="Galileo project identifier")
     galileo_project_name: str = Field(..., description="Name of the Galileo project")
@@ -186,7 +186,7 @@ class AgentWorkspaceDeployment(BaseModel):
     Represents an Agent Workspace Deployment.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     uuid: str = Field(..., description="Unique agent id")
     name: str = Field(..., description="Agent name")
@@ -230,7 +230,7 @@ class AgentWorkspace(BaseModel):
     Represents an Agent Workspace.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     uuid: str = Field(..., description="Unique agent id")
     name: str = Field(..., description="Agent name")
@@ -260,7 +260,7 @@ class ListAgentWorkspacesOutput(BaseModel):
     Response for listing agent workspaces.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_workspaces: list[AgentWorkspace] = Field(
         default_factory=list, description="List of agent workspaces"
@@ -272,7 +272,7 @@ class GetAgentWorkspaceOutput(BaseModel):
     Response for getting a single agent workspace.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_workspace: AgentWorkspace = Field(..., description="The agent workspace")
 
@@ -282,7 +282,7 @@ class PresignedUrlFile(BaseModel):
     A single file's metadata in the request.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     file_name: str = Field(..., description="Local filename")
     file_size: int = Field(..., description="The size of the file in bytes")
@@ -293,7 +293,7 @@ class CreateAgentDeploymentFileUploadPresignedURLInput(BaseModel):
     Input for creating agent deployment file upload presigned URL.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     file: PresignedUrlFile = Field(
         ..., description="The file to generate presigned URL for"
@@ -305,7 +305,7 @@ class FilePresignedUrlResponse(BaseModel):
     Detailed info about each presigned URL returned to the client.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     object_key: str = Field(
         ..., description="The unique object key to store the file as"
@@ -327,7 +327,7 @@ class CreateAgentDeploymentFileUploadPresignedURLOutput(BaseModel):
     Response for creating agent deployment file upload presigned URL.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     request_id: str = Field(
         ..., description="The ID generated for the request for Presigned URLs"
@@ -342,7 +342,7 @@ class AgentDeploymentCodeArtifact(BaseModel):
     File to upload for agent deployment.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_code_file_path: str = Field(..., description="The agent code file path")
     stored_object_key: str = Field(
@@ -356,7 +356,7 @@ class CreateAgentWorkspaceDeploymentInput(BaseModel):
     Input for creating an agent workspace deployment.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_workspace_name: str = Field(..., description="The name of agent workspace")
     agent_deployment_name: str = Field(..., description="The deployment name")
@@ -370,7 +370,7 @@ class CreateAgentWorkspaceDeploymentOutput(BaseModel):
     Response for creating an agent workspace deployment.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_workspace_deployment: AgentWorkspaceDeployment = Field(
         ..., description="The agent workspace deployment"
@@ -382,7 +382,7 @@ class CreateAgentDeploymentReleaseInput(BaseModel):
     Input for creating an agent deployment release.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_workspace_name: str = Field(..., description="The name of agent workspace")
     agent_deployment_name: str = Field(..., description="The deployment name")
@@ -396,7 +396,7 @@ class CreateAgentDeploymentReleaseOutput(BaseModel):
     Response for creating an agent deployment release.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_deployment_release: AgentDeploymentRelease = Field(
         ..., description="The agent deployment release"
@@ -408,7 +408,7 @@ class GetAgentDeploymentReleaseInput(BaseModel):
     Input for getting an agent deployment release.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     uuid: str = Field(..., description="Unique agent deployment release id")
 
@@ -418,7 +418,7 @@ class GetAgentDeploymentReleaseOutput(BaseModel):
     Response for getting an agent deployment release.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_deployment_release: AgentDeploymentRelease = Field(
         ..., description="The agent deployment release"
@@ -430,7 +430,7 @@ class CreateAgentWorkspaceInput(BaseModel):
     Input for creating an agent workspace.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_workspace_name: str = Field(..., description="The name of agent workspace")
     agent_deployment_name: str = Field(..., description="The deployment name")
@@ -445,7 +445,7 @@ class CreateAgentWorkspaceOutput(BaseModel):
     Response for creating an agent workspace.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     agent_workspace: AgentWorkspace = Field(..., description="The agent workspace")
 
@@ -455,7 +455,7 @@ class GetAgentWorkspaceDeploymentRuntimeLogsOutput(BaseModel):
     Response for getting agent workspace deployment runtime logs.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     live_url: str = Field(..., description="URL for live logs")
 
@@ -465,7 +465,7 @@ class StarMetric(BaseModel):
     Represents a star metric for evaluations.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     metric_uuid: str = Field(..., description="UUID of the metric")
     name: str = Field(..., description="Name of the metric")
@@ -515,7 +515,7 @@ class EvaluationDataset(BaseModel):
     Represents an evaluation dataset.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     dataset_uuid: str = Field(..., description="UUID of the dataset")
     dataset_name: str = Field(..., description="Name of the dataset")
@@ -577,7 +577,7 @@ class ListEvaluationTestCasesByWorkspaceInput(BaseModel):
     Input for listing evaluation test cases by workspace.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     workspace_uuid: Optional[str] = Field(
         None,
@@ -593,7 +593,7 @@ class ListEvaluationTestCasesByWorkspaceOutput(BaseModel):
     Response for listing evaluation test cases by workspace.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     evaluation_test_cases: List[EvaluationTestCase] = Field(
         default_factory=list, description="List of evaluation test cases"
@@ -605,7 +605,7 @@ class CreateEvaluationTestCaseInput(BaseModel):
     Input for creating an evaluation test case.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     name: str = Field(..., description="Name of the test case")
     description: str = Field(..., description="Description of the test case")
@@ -630,7 +630,7 @@ class CreateEvaluationTestCaseOutput(BaseModel):
     Response for creating an evaluation test case.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     test_case_uuid: str = Field(..., description="Test case UUID")
 
@@ -640,7 +640,7 @@ class UpdateEvaluationTestCaseMetrics(BaseModel):
     Metrics update structure for evaluation test cases.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     metric_uuids: List[str] = Field(
         default_factory=list, description="List of metric UUIDs"
@@ -652,7 +652,7 @@ class UpdateEvaluationTestCaseInput(BaseModel):
     Input for updating an evaluation test case.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     test_case_uuid: str = Field(..., description="Test case UUID to update")
     name: Optional[str] = Field(None, description="Name of the test case")
@@ -673,7 +673,7 @@ class UpdateEvaluationTestCaseOutput(BaseModel):
     Response for updating an evaluation test case.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     test_case_uuid: str = Field(..., description="Test case UUID")
     version: int = Field(..., description="The new version of the test case")
@@ -684,7 +684,7 @@ class RunEvaluationTestCaseInput(BaseModel):
     Input for running an evaluation test case.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     test_case_uuid: str = Field(..., description="Test case UUID to run")
     agent_uuids: List[str] = Field(
@@ -703,7 +703,7 @@ class RunEvaluationTestCaseOutput(BaseModel):
     Response for running an evaluation test case.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     evaluation_run_uuids: List[str] = Field(
         default_factory=list, description="Evaluation run UUIDs"
@@ -715,7 +715,7 @@ class FileUploadDataSource(BaseModel):
     Represents a file upload data source.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     original_file_name: str = Field(..., description="The original file name")
     stored_object_key: str = Field(
@@ -729,7 +729,7 @@ class CreateEvaluationDatasetInput(BaseModel):
     Input for creating an evaluation dataset.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     name: str = Field(..., description="The name of the agent evaluation dataset")
     file_upload_dataset: FileUploadDataSource = Field(
@@ -742,7 +742,7 @@ class CreateEvaluationDatasetOutput(BaseModel):
     Response for creating an evaluation dataset.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     evaluation_dataset_uuid: str = Field(
         ..., description="Dataset UUID", alias="dataset_uuid"
@@ -754,7 +754,7 @@ class CreateEvaluationDatasetFileUploadPresignedUrlsInput(BaseModel):
     Input for creating evaluation dataset file upload presigned URLs.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     files: List[PresignedUrlFile] = Field(
         ..., description="A list of files to generate presigned URLs for"
@@ -766,7 +766,7 @@ class CreateEvaluationDatasetFileUploadPresignedUrlsOutput(BaseModel):
     Response for creating evaluation dataset file upload presigned URLs.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     request_id: str = Field(
         ..., description="The ID generated for the request for Presigned URLs"
@@ -905,7 +905,7 @@ class GetEvaluationRunOutput(BaseModel):
     Response for getting an evaluation run.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     evaluation_run: EvaluationRun = Field(..., description="The evaluation run")
 
@@ -915,7 +915,7 @@ class ListEvaluationMetricsOutput(BaseModel):
     Response for listing evaluation metrics.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
 
     metrics: List[EvaluationMetric] = Field(
         default_factory=list, description="List of evaluation metrics"
