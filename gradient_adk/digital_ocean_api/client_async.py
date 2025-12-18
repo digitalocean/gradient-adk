@@ -106,6 +106,12 @@ class AsyncDigitalOceanGenAI:
         return False
 
     async def create_traces(self, req: CreateTracesInput) -> CreateTracesOutput:
+        # can not have more than 1,000 spans
+        for trace in req.traces:
+            if len(trace.spans) > 1000:
+                raise DOAPIValidationError(
+                    "A single trace can not have more than 1,000 spans"
+                )
         body = self._model_dump(req)
         logger.debug("Creating traces", request_body=body)
         data = await self._post_json("/gen-ai/traces", body)

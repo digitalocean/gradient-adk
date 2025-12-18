@@ -205,6 +205,9 @@ class AgentWorkspaceDeployment(BaseModel):
     latest_release: Optional[AgentDeploymentRelease] = Field(
         None, description="The latest release"
     )
+    active_release: Optional[AgentDeploymentRelease] = Field(
+        None, description="The active release"
+    )
     logging_config: Optional[AgentLoggingConfig] = Field(
         None, description="Agent Logging Config Details"
     )
@@ -215,7 +218,7 @@ class GetAgentWorkspaceDeploymentOutput(BaseModel):
     Response for getting an agent workspace deployment.
     """
 
-    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    model_config = ConfigDict(populate_by_name=True)
 
     agent_workspace_deployment: AgentWorkspaceDeployment = Field(
         ..., description="The agent workspace deployment"

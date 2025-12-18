@@ -692,6 +692,7 @@ def agent_evaluate(
         if success_threshold is not None:
             typer.echo(f"🎯 Success threshold: {success_threshold}")
         typer.echo()
+        evaluation_run_uuid = None
 
         # Create async function to run evaluation
         async def run_evaluation():
@@ -774,7 +775,9 @@ def agent_evaluate(
         typer.echo()
         typer.echo("=" * 60)
         typer.echo(f"📊 View full results in the DigitalOcean console:")
-        typer.echo(f"   https://cloud.digitalocean.com/gen-ai/workspaces")
+        typer.echo(
+            f"   https://cloud.digitalocean.com/gen-ai/agent-workspaces/{agent_workspace_name}/evaluations/test-cases/{evaluation_run.test_case_uuid}"
+        )
         typer.echo("=" * 60)
 
     except TimeoutError as e:
@@ -783,7 +786,10 @@ def agent_evaluate(
         typer.echo(
             "\nThe evaluation is still running. Check the console for status:", err=True
         )
-        typer.echo("  https://cloud.digitalocean.com/gen-ai/workspaces", err=True)
+        typer.echo(
+            f"  https://cloud.digitalocean.com/gen-ai/agent-workspaces/{agent_workspace_name}/evaluations/test-cases/{evaluation_run.test_case_uuid}",
+            err=True,
+        )
         raise typer.Exit(1)
     except EnvironmentError as e:
         typer.echo(f"❌ {e}", err=True)
