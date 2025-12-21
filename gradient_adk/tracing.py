@@ -34,6 +34,7 @@ from __future__ import annotations
 import functools
 import inspect
 import uuid
+import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
@@ -179,7 +180,76 @@ def _trace_base(
     def decorator(func: F) -> F:
         span_name = name or func.__name__
 
-        if inspect.iscoroutinefunction(func):
+        # Handle async generator functions (functions with `yield` that are async)
+        if inspect.isasyncgenfunction(func):
+
+            @functools.wraps(func)
+            async def async_gen_wrapper(*args, **kwargs):
+                tracker = get_tracker()
+                if not tracker:
+                    # No tracker available, just call the function
+                    async for chunk in func(*args, **kwargs):
+                        yield chunk
+                    return
+
+                # Capture network activity
+                interceptor = get_network_interceptor()
+                try:
+                    network_token = interceptor.snapshot_token()
+                except Exception:
+                    network_token = 0
+
+                # Create span and start tracking
+                inputs_snapshot = _snapshot_args_kwargs(args, kwargs)
+                span = _create_span(span_name, inputs_snapshot)
+
+                # Mark span type
+                if span_type == SpanType.LLM:
+                    _ensure_meta(span)["is_llm_call"] = True
+                elif span_type == SpanType.TOOL:
+                    _ensure_meta(span)["is_tool_call"] = True
+                elif span_type == SpanType.RETRIEVER:
+                    _ensure_meta(span)["is_retriever_call"] = True
+
+                tracker.on_node_start(span)
+
+                collected: list[str] = []
+                try:
+                    # Iterate the original generator, collecting content
+                    async for chunk in func(*args, **kwargs):
+                        # Convert chunk to string for collection
+                        if isinstance(chunk, bytes):
+                            chunk_str = chunk.decode("utf-8", errors="replace")
+                        elif isinstance(chunk, dict):
+                            chunk_str = json.dumps(chunk)
+                        elif chunk is None:
+                            # Skip None values
+                            continue
+                        else:
+                            chunk_str = str(chunk)
+
+                        collected.append(chunk_str)
+                        yield chunk
+
+                    # Check for network activity (LLM calls) - only if not already marked
+                    if span_type is None:
+                        try:
+                            if interceptor.hits_since(network_token) > 0:
+                                _ensure_meta(span)["is_llm_call"] = True
+                        except Exception:
+                            pass
+
+                    # Stream complete - finalize span with collected content
+                    tracker.on_node_end(span, {"content": "".join(collected)})
+
+                except Exception as e:
+                    tracker.on_node_error(span, e)
+                    raise
+
+            return async_gen_wrapper  # type: ignore
+
+        # Handle regular async functions (coroutines)
+        elif inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
             async def async_wrapper(*args, **kwargs):
@@ -220,6 +290,43 @@ def _trace_base(
                         except Exception:
                             pass
 
+                    # If the result is an async generator, wrap it so we can collect output
+                    # without double-iterating. We delay on_node_end until the stream is consumed.
+                    if result is not None and (
+                        hasattr(result, "__aiter__") or inspect.isasyncgen(result)
+                    ):
+
+                        async def _streaming_wrapper(gen):
+                            collected: list[str] = []
+                            try:
+                                async for chunk in gen:
+                                    # Convert chunk to string for collection
+                                    if isinstance(chunk, bytes):
+                                        chunk_str = chunk.decode(
+                                            "utf-8", errors="replace"
+                                        )
+                                    elif isinstance(chunk, dict):
+                                        chunk_str = json.dumps(chunk)
+                                    elif chunk is None:
+                                        # Skip None values
+                                        continue
+                                    else:
+                                        chunk_str = str(chunk)
+
+                                    collected.append(chunk_str)
+                                    yield chunk
+
+                                # Stream complete - finalize span
+                                tracker.on_node_end(
+                                    span, {"content": "".join(collected)}
+                                )
+                            except Exception as e:
+                                tracker.on_node_error(span, e)
+                                raise
+
+                        return _streaming_wrapper(result)
+
+                    # Non-streaming path
                     output = _snapshot_output(result)
                     tracker.on_node_end(span, output)
                     return result
@@ -271,7 +378,13 @@ def _trace_base(
                         except Exception:
                             pass
 
-                    output = _snapshot_output(result)
+                    # Check if result is an async generator - pass directly without snapshotting
+                    if result is not None and (
+                        hasattr(result, "__aiter__") or inspect.isasyncgen(result)
+                    ):
+                        output = result
+                    else:
+                        output = _snapshot_output(result)
                     tracker.on_node_end(span, output)
                     return result
 

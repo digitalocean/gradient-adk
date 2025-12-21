@@ -25,7 +25,7 @@ def patch_helpers(monkeypatch):
 
 class TrackerDouble:
     """Mock tracker for testing."""
-    
+
     def __init__(self):
         self.started = []
         self.ended = []
@@ -53,7 +53,7 @@ class TrackerDouble:
 
 class LoggerDouble:
     """Mock logger for testing."""
-    
+
     def __init__(self):
         self.errors = []
 
@@ -68,18 +68,19 @@ class LoggerDouble:
 
 def test_rejects_functions_with_wrong_arity():
     """Test that functions with wrong number of parameters are rejected."""
+
     # Too few params
     def too_few():
         pass
-    
+
     with pytest.raises(ValueError) as ex:
         entrypoint(too_few)
     assert "must accept (data) or (data, context)" in str(ex.value)
-    
+
     # Too many params
     def too_many(a, b, c):
         pass
-    
+
     with pytest.raises(ValueError) as ex:
         entrypoint(too_many)
     assert "must accept (data) or (data, context)" in str(ex.value)
@@ -238,8 +239,8 @@ def test_run_endpoint_streaming_async_generator_two_params(patch_helpers):
     with TestClient(fastapi_app) as client:
         with client.stream("POST", "/run", json={"p": 1}) as resp:
             assert resp.status_code == 200
-            # Read the full stream
-            body = resp.text
+            # Read the full stream by iterating
+            body = "".join(chunk for chunk in resp.iter_text())
             assert body == "hello world"
 
     # Tracker should have been called
@@ -262,7 +263,7 @@ def test_run_endpoint_streaming_async_generator_one_param(patch_helpers):
     with TestClient(fastapi_app) as client:
         with client.stream("POST", "/run", json={"p": 1}) as resp:
             assert resp.status_code == 200
-            body = resp.text
+            body = "".join(chunk for chunk in resp.iter_text())
             assert body == "abc"
 
     assert tracker.started and tracker.started[-1][0] == "handler"
@@ -281,7 +282,7 @@ def test_run_endpoint_streaming_with_dict_chunks(patch_helpers):
     with TestClient(fastapi_app) as client:
         with client.stream("POST", "/run", json={"p": 1}) as resp:
             assert resp.status_code == 200
-            body = resp.text
+            body = "".join(chunk for chunk in resp.iter_text())
             # Dicts are JSON serialized
             assert '{"type": "status"' in body
             assert '{"type": "data"' in body
@@ -327,7 +328,7 @@ def test_run_endpoint_streaming_with_bytes(patch_helpers):
     with TestClient(fastapi_app) as client:
         with client.stream("POST", "/run", json={"p": 1}) as resp:
             assert resp.status_code == 200
-            body = resp.text
+            body = "".join(chunk for chunk in resp.iter_text())
             assert body == "hello world"
 
     assert tracker.started and tracker.started[-1][0] == "handler"
@@ -347,7 +348,7 @@ def test_run_endpoint_streaming_skips_none(patch_helpers):
     with TestClient(fastapi_app) as client:
         with client.stream("POST", "/run", json={"p": 1}) as resp:
             assert resp.status_code == 200
-            body = resp.text
+            body = "".join(chunk for chunk in resp.iter_text())
             assert body == "ab"  # None skipped
 
     assert tracker.started and tracker.started[-1][0] == "handler"
@@ -363,11 +364,7 @@ def test_evaluation_mode_tracking(patch_helpers):
 
     fastapi_app = globals()["fastapi_app"]
     with TestClient(fastapi_app) as client:
-        r = client.post(
-            "/run",
-            json={"test": 1},
-            headers={"evaluation-id": "eval-123"}
-        )
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
         assert r.status_code == 200
 
     # Check that is_evaluation was passed correctly

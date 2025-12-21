@@ -276,6 +276,10 @@ class LangGraphInstrumentor:
             intr,
             tok,
         ):
+            # NOTE: Async generators should be handled by the wrapper functions
+            # (_wrap_async_func, _wrap_sync_func, etc.) BEFORE calling _finish_ok.
+            # The wrappers collect streamed content and pass {"content": "..."} here.
+
             # Check if this node made any tracked API calls (e.g., LLM inference)
             if _had_hits_since(intr, tok):
                 _ensure_meta(rec)["is_llm_call"] = True
@@ -285,7 +289,6 @@ class LangGraphInstrumentor:
 
                 if api_request or api_response:
                     # Use actual API payloads instead of function args
-                    # Update the inputs to the actual API request (e.g., LLM messages)
                     if api_request:
                         rec.inputs = _freeze(api_request)
 
@@ -318,6 +321,51 @@ class LangGraphInstrumentor:
                 rec, snap, intr, tok = _start(node_name, a, kw)
                 try:
                     ret = await func(*a, **kw)
+
+                    # If ret is an async generator, we need to wrap it to collect
+                    # content and defer _finish_ok until the stream is consumed
+                    if ret is not None and (
+                        hasattr(ret, "__aiter__") or inspect.isasyncgen(ret)
+                    ):
+
+                        async def _streaming_wrapper(gen):
+                            import json
+
+                            collected: list[str] = []
+                            try:
+                                async for chunk in gen:
+                                    # Convert chunk to string for collection
+                                    if isinstance(chunk, bytes):
+                                        chunk_str = chunk.decode(
+                                            "utf-8", errors="replace"
+                                        )
+                                    elif isinstance(chunk, dict):
+                                        chunk_str = json.dumps(chunk)
+                                    elif chunk is None:
+                                        continue
+                                    else:
+                                        chunk_str = str(chunk)
+
+                                    collected.append(chunk_str)
+                                    yield chunk
+
+                                # Stream complete - finalize with collected content
+                                _finish_ok(
+                                    rec,
+                                    snap,
+                                    a,
+                                    kw,
+                                    {"content": "".join(collected)},
+                                    intr,
+                                    tok,
+                                )
+                            except BaseException as e:
+                                _finish_err(rec, intr, tok, e)
+                                raise
+
+                        return _streaming_wrapper(ret)
+
+                    # Non-streaming: finalize immediately
                     _finish_ok(rec, snap, a, kw, ret, intr, tok)
                     return ret
                 except BaseException as e:
@@ -333,6 +381,51 @@ class LangGraphInstrumentor:
                 rec, snap, intr, tok = _start(node_name, a, kw)
                 try:
                     ret = func(*a, **kw)
+
+                    # If ret is an async generator, we need to wrap it to collect
+                    # content and defer _finish_ok until the stream is consumed
+                    if ret is not None and (
+                        hasattr(ret, "__aiter__") or inspect.isasyncgen(ret)
+                    ):
+
+                        async def _streaming_wrapper(gen):
+                            import json
+
+                            collected: list[str] = []
+                            try:
+                                async for chunk in gen:
+                                    # Convert chunk to string for collection
+                                    if isinstance(chunk, bytes):
+                                        chunk_str = chunk.decode(
+                                            "utf-8", errors="replace"
+                                        )
+                                    elif isinstance(chunk, dict):
+                                        chunk_str = json.dumps(chunk)
+                                    elif chunk is None:
+                                        continue
+                                    else:
+                                        chunk_str = str(chunk)
+
+                                    collected.append(chunk_str)
+                                    yield chunk
+
+                                # Stream complete - finalize with collected content
+                                _finish_ok(
+                                    rec,
+                                    snap,
+                                    a,
+                                    kw,
+                                    {"content": "".join(collected)},
+                                    intr,
+                                    tok,
+                                )
+                            except BaseException as e:
+                                _finish_err(rec, intr, tok, e)
+                                raise
+
+                        return _streaming_wrapper(ret)
+
+                    # Non-streaming: finalize immediately
                     _finish_ok(rec, snap, a, kw, ret, intr, tok)
                     return ret
                 except BaseException as e:
@@ -380,6 +473,47 @@ class LangGraphInstrumentor:
                 rec, snap, intr, tok = _start(node_name, a, kw)
                 try:
                     ret = await runnable.ainvoke(*a, **kw)
+
+                    # If ret is an async generator, wrap it to collect content
+                    if ret is not None and (
+                        hasattr(ret, "__aiter__") or inspect.isasyncgen(ret)
+                    ):
+
+                        async def _streaming_wrapper(gen):
+                            import json
+
+                            collected: list[str] = []
+                            try:
+                                async for chunk in gen:
+                                    if isinstance(chunk, bytes):
+                                        chunk_str = chunk.decode(
+                                            "utf-8", errors="replace"
+                                        )
+                                    elif isinstance(chunk, dict):
+                                        chunk_str = json.dumps(chunk)
+                                    elif chunk is None:
+                                        continue
+                                    else:
+                                        chunk_str = str(chunk)
+
+                                    collected.append(chunk_str)
+                                    yield chunk
+
+                                _finish_ok(
+                                    rec,
+                                    snap,
+                                    a,
+                                    kw,
+                                    {"content": "".join(collected)},
+                                    intr,
+                                    tok,
+                                )
+                            except BaseException as e:
+                                _finish_err(rec, intr, tok, e)
+                                raise
+
+                        return _streaming_wrapper(ret)
+
                     _finish_ok(rec, snap, a, kw, ret, intr, tok)
                     return ret
                 except BaseException as e:
@@ -394,6 +528,47 @@ class LangGraphInstrumentor:
                 rec, snap, intr, tok = _start(node_name, a, kw)
                 try:
                     ret = runnable.invoke(*a, **kw)
+
+                    # If ret is an async generator, wrap it to collect content
+                    if ret is not None and (
+                        hasattr(ret, "__aiter__") or inspect.isasyncgen(ret)
+                    ):
+
+                        async def _streaming_wrapper(gen):
+                            import json
+
+                            collected: list[str] = []
+                            try:
+                                async for chunk in gen:
+                                    if isinstance(chunk, bytes):
+                                        chunk_str = chunk.decode(
+                                            "utf-8", errors="replace"
+                                        )
+                                    elif isinstance(chunk, dict):
+                                        chunk_str = json.dumps(chunk)
+                                    elif chunk is None:
+                                        continue
+                                    else:
+                                        chunk_str = str(chunk)
+
+                                    collected.append(chunk_str)
+                                    yield chunk
+
+                                _finish_ok(
+                                    rec,
+                                    snap,
+                                    a,
+                                    kw,
+                                    {"content": "".join(collected)},
+                                    intr,
+                                    tok,
+                                )
+                            except BaseException as e:
+                                _finish_err(rec, intr, tok, e)
+                                raise
+
+                        return _streaming_wrapper(ret)
+
                     _finish_ok(rec, snap, a, kw, ret, intr, tok)
                     return ret
                 except BaseException as e:
