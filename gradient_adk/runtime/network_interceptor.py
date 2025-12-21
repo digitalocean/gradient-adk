@@ -94,10 +94,21 @@ class NetworkInterceptor:
                 self_client, request, **kwargs
             )
 
-            response_payload = await _global_interceptor._extract_response_payload(
-                response
+            # Don't read response body for streaming responses - it would buffer the entire stream!
+            # Check if this is a streaming response by looking at headers or response type
+            is_streaming = (
+                response.headers.get("transfer-encoding") == "chunked" or
+                "text/event-stream" in response.headers.get("content-type", "") or
+                hasattr(response, "aiter_bytes") or
+                hasattr(response, "aiter_lines")
             )
-            _global_interceptor._record_response(url_str, response_payload)
+            
+            if not is_streaming:
+                response_payload = await _global_interceptor._extract_response_payload(
+                    response
+                )
+                _global_interceptor._record_response(url_str, response_payload)
+            # For streaming responses, we skip payload capture to preserve streaming behavior
 
             return response
 

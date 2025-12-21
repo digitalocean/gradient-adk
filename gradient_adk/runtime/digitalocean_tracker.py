@@ -16,7 +16,7 @@ from gradient_adk.digital_ocean_api import (
 from .interfaces import NodeExecution
 
 from datetime import datetime, timezone
-from gradient_adk.streaming import StreamingResponse, ServerSentEventsResponse
+from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
 
 
 def _utc(dt: datetime | None = None) -> datetime:
@@ -58,44 +58,49 @@ class DigitalOceanTracesTracker:
         self, resp
     ) -> Optional[tuple[object, Callable[[object], None]]]:
         """
-        If `resp` looks like a streaming response that iterates over `resp.content`,
-        return (orig_iterable, setter) so we can replace it. Else None.
+        If `resp` is a streaming response (FastAPIStreamingResponse or async iterator),
+        return (orig_iterable, setter) so we can wrap it for tracking. Else None.
+        
+        Note: The decorator handles tracking internally for streaming, so this is mainly
+        for edge cases or legacy usage.
         """
-        # For ServerSentEventsResponse and JSONStreamingResponse, we need to access
-        # the ORIGINAL content before SSE/JSON formatting wraps it
-        if isinstance(resp, (ServerSentEventsResponse, StreamingResponse)):
-            # Get the original user generator before formatting
-            # The content is already the formatted generator, but we can get the original
-            # by checking if it was set in __init__
-            # Actually, we need to intercept at a different level
-
-            # Check if we can get to the original content
-            # The formatted_content was created from the user's content
-            # We need to store the original and intercept there
-            content = getattr(resp, "content", None)
+        # Handle FastAPIStreamingResponse (from decorator or direct usage)
+        if isinstance(resp, FastAPIStreamingResponse):
+            # FastAPI/Starlette StreamingResponse stores the iterator in various ways
+            # Try common attribute names
+            content = (
+                getattr(resp, "body_iterator", None) or
+                getattr(resp, "iterator", None) or
+                getattr(resp, "content", None)
+            )
+            
             if content is None:
                 return None
-
-            # The content is already the SSE/JSON formatted generator
-            # We need to wrap it but also parse back the content
+            
+            # Check if it's an async iterator/generator
             if hasattr(content, "__aiter__") or inspect.isasyncgen(content):
-
                 def _setter(new_iterable):
-                    resp.content = new_iterable
-
+                    # Try to set the iterator in the response object
+                    # Note: This may not work for all FastAPI versions, but we try
+                    if hasattr(resp, "body_iterator"):
+                        resp.body_iterator = new_iterable
+                    elif hasattr(resp, "iterator"):
+                        resp.iterator = new_iterable
+                    elif hasattr(resp, "content"):
+                        resp.content = new_iterable
+                
                 return content, _setter
-
-        # Fallback for plain StreamingResponse
-        content = getattr(resp, "content", None)
-        if content is None:
-            return None
-        # async iterator / async generator objects
-        if hasattr(content, "__aiter__") or inspect.isasyncgen(content):
-
+        
+        # Handle raw async iterators/generators (direct usage - less common)
+        if hasattr(resp, "__aiter__") or inspect.isasyncgen(resp):
+            # For raw iterators, we can't replace them in place, but we can still
+            # wrap them if needed. This case is rare since most go through FastAPIStreamingResponse.
             def _setter(new_iterable):
-                resp.content = new_iterable
-
-            return content, _setter
+                # Can't replace the iterator itself
+                pass
+            
+            return resp, _setter
+        
         return None
 
     def on_request_end(self, outputs: Any | None, error: Optional[str]) -> None:
@@ -110,46 +115,38 @@ class DigitalOceanTracesTracker:
 
             async def collecting_iter():
                 collected: list[str] = []
-                async for chunk in orig_iterable:
-                    # Parse SSE formatted strings back to extract content
-                    if isinstance(chunk, str) and chunk.startswith("data: "):
-                        # SSE format: "data: {json}\n\n"
-                        try:
-                            json_str = chunk[
-                                6:
-                            ].strip()  # Remove "data: " prefix and whitespace
-                            data = json.loads(json_str) if json_str else {}
-                            if isinstance(data, dict):
-                                content = (
-                                    data.get("content") or data.get("data") or str(data)
-                                )
-                                collected.append(str(content))
-                            else:
-                                collected.append(str(data))
-                        except Exception:
-                            # Fallback: just collect the raw chunk
-                            collected.append(chunk)
-                    # For ServerSentEventsResponse/JSONStreamingResponse, extract content from dicts
-                    elif isinstance(chunk, dict):
-                        # Try common keys for content
-                        content = (
-                            chunk.get("content") or chunk.get("data") or str(chunk)
-                        )
-                        if isinstance(content, (bytes, bytearray)):
-                            collected.append(content.decode("utf-8", errors="replace"))
+                try:
+                    async for chunk in orig_iterable:
+                        # Convert chunk to string for collection
+                        if isinstance(chunk, bytes):
+                            chunk_str = chunk.decode("utf-8", errors="replace")
+                        elif isinstance(chunk, dict):
+                            # For dict chunks, try to extract meaningful content
+                            content = (
+                                chunk.get("content") or 
+                                chunk.get("data") or 
+                                chunk.get("delta") or
+                                json.dumps(chunk)
+                            )
+                            chunk_str = str(content)
+                        elif chunk is None:
+                            # Skip None values
+                            continue
                         else:
-                            collected.append(str(content))
-                    # collect safely (bytes/str/other)
-                    elif isinstance(chunk, (bytes, bytearray)):
-                        collected.append(chunk.decode("utf-8", errors="replace"))
-                    elif isinstance(chunk, str):
-                        collected.append(chunk)
-                    else:
-                        collected.append(str(chunk))
-                    yield chunk
-                # when the server finishes sending
-                self._req["outputs"] = "".join(collected)
-                await self._submit()
+                            chunk_str = str(chunk)
+                        
+                        collected.append(chunk_str)
+                        yield chunk
+                    
+                    # Stream complete - submit collected content
+                    self._req["outputs"] = "".join(collected)
+                    await self._submit()
+                except Exception as e:
+                    # Error during streaming
+                    self._req["error"] = str(e)
+                    self._req["outputs"] = "".join(collected) if collected else None
+                    await self._submit()
+                    raise
 
             set_iterable(collecting_iter())
             return  # important: don't submit yet

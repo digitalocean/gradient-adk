@@ -1,9 +1,3 @@
-"""Direct FastAPI launch service implementation.
-
-Reverted to a simpler implementation that directly calls `uvicorn.run` in-process.
-Adds clear guidance for users who rely on relative imports.
-"""
-
 from __future__ import annotations
 import importlib
 import sys
@@ -57,7 +51,7 @@ class DirectLaunchService(LaunchService):
         if not self.config_file.exists():
             typer.echo("Error: No agent configuration found.", err=True)
             typer.echo(
-                "Please run 'gradient agent init' first to set up your agent.", err=True
+                "Please run 'gradient agent configure' first to set up your agent details. If you don't have an agent yet, you can create the 'Hello world' agent with 'gradient agent init'.", err=True
             )
             raise typer.Exit(1)
 
@@ -101,10 +95,10 @@ class DirectLaunchService(LaunchService):
                 entrypoint_file.replace(".py", "").replace("/", ".").replace("\\", ".")
             )
             module = importlib.import_module(module_name)
-            if not hasattr(module, "app"):
+            if not hasattr(module, "fastapi_app"):
                 # Soft warning only; user will see clearer error from uvicorn
                 typer.echo(
-                    "⚠️  Warning: module has no 'app' attribute yet. Ensure @entrypoint is applied."
+                    "⚠️  Warning: module has no 'fastapi_app' attribute yet. Ensure @entrypoint is applied."
                 )
         except Exception:
             # Suppress to allow uvicorn to attempt import in correct package context
@@ -142,7 +136,7 @@ class DirectLaunchService(LaunchService):
             typer.echo(f"Server will be accessible at http://{host}:{port}")
             typer.echo("Press Ctrl+C to stop the server")
 
-        app_target = f"{module_name}:app"
+        app_target = f"{module_name}:fastapi_app"
 
         try:
             import uvicorn
