@@ -16,7 +16,7 @@ from gradient_adk.digital_ocean_api import (
 from .interfaces import NodeExecution
 
 from datetime import datetime, timezone
-from gradient_adk.streaming import StreamingResponse, ServerSentEventsResponse
+from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
 
 
 def _utc(dt: datetime | None = None) -> datetime:
@@ -43,6 +43,9 @@ class DigitalOceanTracesTracker:
         self._live: dict[str, NodeExecution] = {}
         self._done: List[NodeExecution] = []
         self._inflight: set[asyncio.Task] = set()
+        self._collection_tasks: set[asyncio.Task] = (
+            set()
+        )  # Tasks collecting async generator outputs
         self._is_evaluation: bool = False
 
     def on_request_start(
@@ -58,44 +61,50 @@ class DigitalOceanTracesTracker:
         self, resp
     ) -> Optional[tuple[object, Callable[[object], None]]]:
         """
-        If `resp` looks like a streaming response that iterates over `resp.content`,
-        return (orig_iterable, setter) so we can replace it. Else None.
-        """
-        # For ServerSentEventsResponse and JSONStreamingResponse, we need to access
-        # the ORIGINAL content before SSE/JSON formatting wraps it
-        if isinstance(resp, (ServerSentEventsResponse, StreamingResponse)):
-            # Get the original user generator before formatting
-            # The content is already the formatted generator, but we can get the original
-            # by checking if it was set in __init__
-            # Actually, we need to intercept at a different level
+        If `resp` is a streaming response (FastAPIStreamingResponse or async iterator),
+        return (orig_iterable, setter) so we can wrap it for tracking. Else None.
 
-            # Check if we can get to the original content
-            # The formatted_content was created from the user's content
-            # We need to store the original and intercept there
-            content = getattr(resp, "content", None)
+        Note: The decorator handles tracking internally for streaming, so this is mainly
+        for edge cases or legacy usage.
+        """
+        # Handle FastAPIStreamingResponse (from decorator or direct usage)
+        if isinstance(resp, FastAPIStreamingResponse):
+            # FastAPI/Starlette StreamingResponse stores the iterator in various ways
+            # Try common attribute names
+            content = (
+                getattr(resp, "body_iterator", None)
+                or getattr(resp, "iterator", None)
+                or getattr(resp, "content", None)
+            )
+
             if content is None:
                 return None
 
-            # The content is already the SSE/JSON formatted generator
-            # We need to wrap it but also parse back the content
+            # Check if it's an async iterator/generator
             if hasattr(content, "__aiter__") or inspect.isasyncgen(content):
 
                 def _setter(new_iterable):
-                    resp.content = new_iterable
+                    # Try to set the iterator in the response object
+                    # Note: This may not work for all FastAPI versions, but we try
+                    if hasattr(resp, "body_iterator"):
+                        resp.body_iterator = new_iterable
+                    elif hasattr(resp, "iterator"):
+                        resp.iterator = new_iterable
+                    elif hasattr(resp, "content"):
+                        resp.content = new_iterable
 
                 return content, _setter
 
-        # Fallback for plain StreamingResponse
-        content = getattr(resp, "content", None)
-        if content is None:
-            return None
-        # async iterator / async generator objects
-        if hasattr(content, "__aiter__") or inspect.isasyncgen(content):
-
+        # Handle raw async iterators/generators (direct usage - less common)
+        if hasattr(resp, "__aiter__") or inspect.isasyncgen(resp):
+            # For raw iterators, we can't replace them in place, but we can still
+            # wrap them if needed. This case is rare since most go through FastAPIStreamingResponse.
             def _setter(new_iterable):
-                resp.content = new_iterable
+                # Can't replace the iterator itself
+                pass
 
-            return content, _setter
+            return resp, _setter
+
         return None
 
     def on_request_end(self, outputs: Any | None, error: Optional[str]) -> None:
@@ -110,46 +119,38 @@ class DigitalOceanTracesTracker:
 
             async def collecting_iter():
                 collected: list[str] = []
-                async for chunk in orig_iterable:
-                    # Parse SSE formatted strings back to extract content
-                    if isinstance(chunk, str) and chunk.startswith("data: "):
-                        # SSE format: "data: {json}\n\n"
-                        try:
-                            json_str = chunk[
-                                6:
-                            ].strip()  # Remove "data: " prefix and whitespace
-                            data = json.loads(json_str) if json_str else {}
-                            if isinstance(data, dict):
-                                content = (
-                                    data.get("content") or data.get("data") or str(data)
-                                )
-                                collected.append(str(content))
-                            else:
-                                collected.append(str(data))
-                        except Exception:
-                            # Fallback: just collect the raw chunk
-                            collected.append(chunk)
-                    # For ServerSentEventsResponse/JSONStreamingResponse, extract content from dicts
-                    elif isinstance(chunk, dict):
-                        # Try common keys for content
-                        content = (
-                            chunk.get("content") or chunk.get("data") or str(chunk)
-                        )
-                        if isinstance(content, (bytes, bytearray)):
-                            collected.append(content.decode("utf-8", errors="replace"))
+                try:
+                    async for chunk in orig_iterable:
+                        # Convert chunk to string for collection
+                        if isinstance(chunk, bytes):
+                            chunk_str = chunk.decode("utf-8", errors="replace")
+                        elif isinstance(chunk, dict):
+                            # For dict chunks, try to extract meaningful content
+                            content = (
+                                chunk.get("content")
+                                or chunk.get("data")
+                                or chunk.get("delta")
+                                or json.dumps(chunk)
+                            )
+                            chunk_str = str(content)
+                        elif chunk is None:
+                            # Skip None values
+                            continue
                         else:
-                            collected.append(str(content))
-                    # collect safely (bytes/str/other)
-                    elif isinstance(chunk, (bytes, bytearray)):
-                        collected.append(chunk.decode("utf-8", errors="replace"))
-                    elif isinstance(chunk, str):
-                        collected.append(chunk)
-                    else:
-                        collected.append(str(chunk))
-                    yield chunk
-                # when the server finishes sending
-                self._req["outputs"] = "".join(collected)
-                await self._submit()
+                            chunk_str = str(chunk)
+
+                        collected.append(chunk_str)
+                        yield chunk
+
+                    # Stream complete - submit collected content
+                    self._req["outputs"] = "".join(collected)
+                    await self._submit()
+                except Exception as e:
+                    # Error during streaming
+                    self._req["error"] = str(e)
+                    self._req["outputs"] = "".join(collected) if collected else None
+                    await self._submit()
+                    raise
 
             set_iterable(collecting_iter())
             return  # important: don't submit yet
@@ -189,8 +190,80 @@ class DigitalOceanTracesTracker:
     def on_node_end(self, node: NodeExecution, outputs: Any | None) -> None:
         live = self._live.pop(node.node_id, node)
         live.end_time = _utc()
+
+        # Handle async generators that may have slipped through
+        # NOTE: The instrumentors should now wrap async generators and collect content
+        # before calling on_node_end. This is a fallback for any edge cases.
+        if outputs is not None:
+            is_async_gen = hasattr(outputs, "__aiter__") or inspect.isasyncgen(outputs)
+            is_stringified_gen = (
+                isinstance(outputs, str)
+                and "<async_generator" in outputs
+                and "at 0x" in outputs
+            )
+            if is_async_gen:
+                # This shouldn't happen if instrumentors are working correctly
+                live.outputs = {
+                    "streaming": True,
+                    "_debug": "Async generator reached on_node_end without collection. Check instrumentor.",
+                }
+                self._done.append(live)
+                return
+            if is_stringified_gen:
+                # This happens when _freeze() is called on an async generator
+                live.outputs = {
+                    "streaming": True,
+                    "_debug": "Async generator was converted to string. Instrumentor should not freeze async generators.",
+                }
+                self._done.append(live)
+                return
+
         live.outputs = outputs
         self._done.append(live)
+
+    async def _collect_async_generator_outputs(self, node: NodeExecution, gen) -> None:
+        """Collect content from an async generator and update node outputs.
+
+        This handles cases where a node function returns an async generator
+        (e.g., streaming LLM responses) rather than being an async generator function itself.
+        """
+        collected: list[str] = []
+        try:
+            # If gen is awaitable (coroutine), await it first
+            if hasattr(gen, "__await__"):
+                gen = await gen
+
+            async for chunk in gen:
+                # Convert chunk to string for collection
+                if isinstance(chunk, bytes):
+                    chunk_str = chunk.decode("utf-8", errors="replace")
+                elif isinstance(chunk, dict):
+                    # For dict chunks, try to extract meaningful content
+                    # Common patterns: LLM delta chunks, status updates, etc.
+                    content = (
+                        chunk.get("content")
+                        or chunk.get("data")
+                        or chunk.get("delta")
+                        or chunk.get("text")
+                        or json.dumps(chunk)
+                    )
+                    chunk_str = str(content)
+                elif chunk is None:
+                    continue
+                else:
+                    chunk_str = str(chunk)
+
+                collected.append(chunk_str)
+
+            # Update the node's outputs with collected content
+            # Wrap in dict to match expected format
+            if collected:
+                node.outputs = {"content": "".join(collected)}
+            else:
+                node.outputs = {"content": ""}
+        except Exception as e:
+            # On error, store error message
+            node.outputs = {"error": f"Error collecting stream: {str(e)}"}
 
     def on_node_error(self, node: NodeExecution, error: BaseException) -> None:
         live = self._live.pop(node.node_id, node)
@@ -199,13 +272,23 @@ class DigitalOceanTracesTracker:
         self._done.append(live)
 
     async def aclose(self) -> None:
-        if self._inflight:
-            await asyncio.gather(*list(self._inflight), return_exceptions=True)
+        # Wait for both collection tasks and submission tasks
+        all_tasks = list(self._inflight) + list(self._collection_tasks)
+        if all_tasks:
+            await asyncio.gather(*all_tasks, return_exceptions=True)
             self._inflight.clear()
+            self._collection_tasks.clear()
         await self._client.aclose()
 
     async def _submit(self) -> Optional[str]:
         try:
+            # Wait for any pending async generator collections to complete
+            # This ensures node outputs are fully collected before building the trace
+            if self._collection_tasks:
+                await asyncio.gather(
+                    *list(self._collection_tasks), return_exceptions=True
+                )
+
             trace = self._build_trace()
             req = CreateTracesInput(
                 agent_workspace_name=self._ws,

@@ -97,8 +97,8 @@ async def main(input: dict, context: dict):
     graph.add_node("llm_call", llm_call)
     graph.set_entry_point("llm_call")
     
-    app = graph.compile()
-    result = await app.ainvoke({"input": input.get("query")})
+    graph = graph.compile()
+    result = await graph.ainvoke({"input": input.get("query")})
     return result["output"]
 ```
 
@@ -139,7 +139,7 @@ async def main(input: dict, context: dict):
 The runtime supports streaming responses with automatic trace capture:
 
 ```python
-from gradient_adk import entrypoint, StreamingResponse
+from gradient_adk import entrypoint
 
 @entrypoint
 async def main(input: dict, context: dict):
@@ -147,22 +147,6 @@ async def main(input: dict, context: dict):
     async def generate_chunks():
         async for chunk in llm.stream(input["query"]):
             yield chunk
-    
-    return StreamingResponse(generate_chunks(), media_type="text/plain")
-```
-
-For JSON streaming:
-
-```python
-from gradient_adk import entrypoint, stream_json
-
-@entrypoint
-async def main(input: dict, context: dict):
-    async def generate_events():
-        async for event in process_stream(input["query"]):
-            yield {"type": "chunk", "data": event}
-    
-    return stream_json(generate_events())
 ```
 
 ## CLI Commands
@@ -191,6 +175,8 @@ gradient agent traces
 
 ### Evaluation
 
+You can evaluate your deployed agent with a number of useful evaluation metrics. See the [DigitalOcean docs](https://docs.digitalocean.com/products/gradient-ai-platform/how-to/create-evaluation-datasets/#evaluation-datasets-for-agents-built-with-agent-development-kit) for details on what belongs in a dataset.
+
 ```bash
 # Run evaluation (interactive)
 gradient agent evaluate
@@ -204,13 +190,14 @@ gradient agent evaluate \
   --success-threshold 80.0
 ```
 
+
 ## Trace Capture
 
 The ADK runtime automatically captures detailed traces:
 
 ### What Gets Traced
-- **LangGraph Nodes**: All node executions, state transitions, and edges
-- **LLM Calls**: Function decorated with `@trace_llm` or detected via network interception
+- **LangGraph Nodes**: All node executions, state transitions, and edges (including LLM calls, tool calls, and DigitalOcean Knowledge Base calls)
+- **LLM Calls**: Function decorated with `@trace_llm`
 - **Tool Calls**: Functions decorated with `@trace_tool`
 - **Retriever Calls**: Functions decorated with `@trace_retriever`
 - **HTTP Requests**: Request/response payloads for LLM API calls
@@ -225,6 +212,8 @@ from gradient_adk import trace_llm, trace_tool, trace_retriever
 @trace_tool("calculator")      # For tool/function calls
 @trace_retriever("db_search")  # For retrieval/search operations
 ```
+
+These decorators are used to log steps or spans of your agent workflow that are not automatically captured.  These will log things like the input, output, and step duration and make them available in your agent's traces and for use in agent evaluations.
 
 ### Viewing Traces
 Traces are:
@@ -266,7 +255,6 @@ The Gradient ADK is designed to work with any Python-based AI agent framework:
 - ✅ **LangGraph** - Automatic trace capture (zero configuration)
 - ✅ **LangChain** - Use trace decorators (`@trace_llm`, `@trace_tool`, `@trace_retriever`) for custom spans
 - ✅ **CrewAI** - Use trace decorators for agent and task execution
-- ✅ **AutoGen** - Use trace decorators for agent interactions
 - ✅ **Custom Frameworks** - Use trace decorators for any function
 
 ## Support
