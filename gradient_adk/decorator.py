@@ -26,28 +26,28 @@ capture_graph()
 class _StreamingIteratorWithTracking:
     """
     Async iterator that wraps a user's async generator for streaming responses.
-    
+
     This uses direct __anext__ calls instead of nested generators to avoid
     buffering issues that can occur with generator-within-generator patterns.
     """
-    
+
     def __init__(self, user_generator, tracker, entrypoint_name: str):
         self._gen = user_generator
         self._tracker = tracker
         self._entrypoint = entrypoint_name
         self._collected: List[str] = []
         self._finished = False
-    
+
     def __aiter__(self):
         return self
-    
+
     async def __anext__(self) -> str:
         if self._finished:
             raise StopAsyncIteration
-        
+
         try:
             chunk = await self._gen.__anext__()
-            
+
             # Convert chunk to string
             if isinstance(chunk, bytes):
                 chunk_str = chunk.decode("utf-8", errors="replace")
@@ -58,27 +58,27 @@ class _StreamingIteratorWithTracking:
                 return await self.__anext__()
             else:
                 chunk_str = str(chunk)
-            
+
             self._collected.append(chunk_str)
             return chunk_str
-            
+
         except StopAsyncIteration:
             # Stream complete - submit tracking data
             self._finished = True
             await self._submit_tracking(error=None)
             raise
-            
+
         except Exception as e:
             # Error during streaming
             self._finished = True
             await self._submit_tracking(error=str(e))
             raise
-    
+
     async def _submit_tracking(self, error: Optional[str]) -> None:
         """Submit collected stream data to tracker."""
         if not self._tracker:
             return
-        
+
         try:
             self._tracker._req["outputs"] = "".join(self._collected)
             if error:
@@ -92,30 +92,30 @@ class _StreamingIteratorWithTracking:
 def entrypoint(func: Callable) -> Callable:
     """
     Decorator that creates a FastAPI app and exposes it as `app` in the caller module.
-    
+
     The decorated function can accept either (data) or (data, context).
-    
+
     For streaming responses, use an async generator function:
-    
+
         @entrypoint
         async def my_agent(payload):
             async for chunk in some_stream:
                 yield chunk
-    
+
     For regular responses, use a normal async function:
-    
+
         @entrypoint
         async def my_agent(payload):
             return {"result": "Hello"}
-    
+
     The decorator automatically detects async generators and handles streaming.
     """
     sig = inspect.signature(func)
     num_params = len(sig.parameters)
-    
+
     if num_params < 1 or num_params > 2:
         raise ValueError(f"{func.__name__} must accept (data) or (data, context)")
-    
+
     is_async_generator = inspect.isasyncgenfunction(func)
 
     fastapi_app = FastAPI(title=f"Gradient Agent - {func.__name__}", version="1.0.0")
@@ -165,13 +165,13 @@ def entrypoint(func: Callable) -> Callable:
                         pass
                 logger.error("Error creating generator", error=str(e), exc_info=True)
                 raise HTTPException(status_code=500, detail="Internal server error")
-            
+
             # Wrap in tracking iterator
             streaming_iter = _StreamingIteratorWithTracking(user_gen, tr, func.__name__)
-            
+
             return FastAPIStreamingResponse(
                 streaming_iter,
-                media_type="text/plain",
+                media_type="text/event-stream",
                 headers={
                     "Cache-Control": "no-cache",
                     "X-Accel-Buffering": "no",
@@ -211,6 +211,7 @@ def entrypoint(func: Callable) -> Callable:
 
         if trace_id:
             from fastapi.responses import JSONResponse
+
             return JSONResponse(
                 content=result,
                 headers={"X-Gradient-Trace-Id": trace_id},
@@ -225,8 +226,9 @@ def entrypoint(func: Callable) -> Callable:
 
     # Expose fastapi_app in caller's module for `uvicorn main:fastapi_app`
     import sys
+
     sys._getframe(1).f_globals["fastapi_app"] = fastapi_app
-    
+
     return func
 
 
