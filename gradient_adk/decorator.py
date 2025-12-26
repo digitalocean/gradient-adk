@@ -11,7 +11,7 @@ import json
 from typing import Callable, Optional, Any, Dict, List
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
+from fastapi.responses import StreamingResponse as FastAPIStreamingResponse, JSONResponse
 import uvicorn
 
 from .logging import get_logger
@@ -161,12 +161,62 @@ def entrypoint(func: Callable) -> Callable:
                 if tr:
                     try:
                         tr.on_request_end(outputs=None, error=str(e))
+                        if is_evaluation:
+                            await tr.submit_and_get_trace_id()
                     except Exception:
                         pass
                 logger.error("Error creating generator", error=str(e), exc_info=True)
                 raise HTTPException(status_code=500, detail="Internal server error")
 
-            # Wrap in tracking iterator
+            # For evaluations, collect all chunks and return with trace-id header
+            # This is necessary because HTTP headers must be sent before the body,
+            # but the trace-id is only available after the stream completes.
+            if is_evaluation:
+                collected_chunks = []
+                error_msg = None
+                try:
+                    async for chunk in user_gen:
+                        # Convert chunk to string (same logic as _StreamingIteratorWithTracking)
+                        if isinstance(chunk, bytes):
+                            chunk_str = chunk.decode("utf-8", errors="replace")
+                        elif isinstance(chunk, dict):
+                            chunk_str = json.dumps(chunk)
+                        elif chunk is None:
+                            continue
+                        else:
+                            chunk_str = str(chunk)
+                        collected_chunks.append(chunk_str)
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error("Error during evaluation streaming", error=error_msg, exc_info=True)
+
+                result = "".join(collected_chunks)
+
+                # Submit trace and get trace-id
+                trace_id = None
+                if tr:
+                    try:
+                        tr._req["outputs"] = result
+                        if error_msg:
+                            tr._req["error"] = error_msg
+                        trace_id = await tr.submit_and_get_trace_id()
+                    except Exception:
+                        pass
+
+                # Return response with trace-id header
+                if error_msg:
+                    return JSONResponse(
+                        status_code=500,
+                        content={"error": error_msg, "partial_result": result if result else None},
+                        headers={"X-Gradient-Trace-Id": trace_id} if trace_id else {},
+                    )
+
+                return JSONResponse(
+                    content=result,
+                    headers={"X-Gradient-Trace-Id": trace_id} if trace_id else {},
+                )
+
+            # Non-evaluation: Wrap in tracking iterator and stream normally
             streaming_iter = _StreamingIteratorWithTracking(user_gen, tr, func.__name__)
 
             return FastAPIStreamingResponse(
@@ -191,12 +241,24 @@ def entrypoint(func: Callable) -> Callable:
                 else:
                     result = func(body, None)
         except Exception as e:
+            # For evaluations, submit trace even on error to get trace-id
+            trace_id = None
             if tr:
                 try:
                     tr.on_request_end(outputs=None, error=str(e))
+                    if is_evaluation:
+                        trace_id = await tr.submit_and_get_trace_id()
                 except Exception:
                     pass
             logger.error("Error in /run", error=str(e), exc_info=True)
+            
+            # Return error with trace-id header if available
+            if trace_id:
+                return JSONResponse(
+                    status_code=500,
+                    content={"detail": "Internal server error"},
+                    headers={"X-Gradient-Trace-Id": trace_id},
+                )
             raise HTTPException(status_code=500, detail="Internal server error")
 
         # Regular response with tracking
@@ -210,8 +272,6 @@ def entrypoint(func: Callable) -> Callable:
                 pass
 
         if trace_id:
-            from fastapi.responses import JSONResponse
-
             return JSONResponse(
                 content=result,
                 headers={"X-Gradient-Trace-Id": trace_id},

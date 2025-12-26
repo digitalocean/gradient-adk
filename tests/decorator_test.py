@@ -31,6 +31,7 @@ class TrackerDouble:
         self.ended = []
         self.closed = False
         self._req = {}
+        self._trace_id_to_return = "test-trace-id-123"
 
     def on_request_start(self, name, inputs, is_evaluation=False):
         self.started.append((name, inputs, is_evaluation))
@@ -44,6 +45,11 @@ class TrackerDouble:
     async def _submit(self):
         """Simulate async submission."""
         await asyncio.sleep(0)
+
+    async def submit_and_get_trace_id(self):
+        """Simulate trace submission and return trace-id."""
+        await asyncio.sleep(0)
+        return self._trace_id_to_return
 
     async def aclose(self):
         """Simulate async close."""
@@ -370,6 +376,120 @@ def test_evaluation_mode_tracking(patch_helpers):
     # Check that is_evaluation was passed correctly
     assert tracker.started
     assert tracker.started[-1][2] is True  # is_evaluation flag
+
+
+def test_evaluation_mode_returns_trace_id_header(patch_helpers):
+    """Test that evaluation mode returns trace-id in header for non-streaming."""
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        return {"result": "ok"}
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 200
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-123"
+        assert r.json() == {"result": "ok"}
+
+
+def test_evaluation_mode_streaming_returns_trace_id_header(patch_helpers):
+    """Test that evaluation mode with streaming collects chunks and returns trace-id header."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield "hello"
+        yield " "
+        yield "world"
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        # Note: With evaluation mode, streaming is collected and returned as JSON
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 200
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-123"
+        # Content should be the collected chunks as a string
+        assert r.json() == "hello world"
+
+
+def test_evaluation_mode_streaming_with_dict_chunks(patch_helpers):
+    """Test that evaluation mode with streaming handles dict chunks."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield {"type": "status", "message": "started"}
+        yield {"type": "data", "value": 42}
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 200
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-123"
+        # Dicts are JSON serialized and concatenated
+        content = r.json()
+        assert '{"type": "status"' in content
+        assert '{"type": "data"' in content
+
+
+def test_evaluation_mode_streaming_error_returns_trace_id_header(patch_helpers):
+    """Test that evaluation mode with streaming error returns trace-id header and partial content."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield "chunk1"
+        yield "chunk2"
+        raise RuntimeError("stream error")
+        yield "chunk3"  # Never reached
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 500
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-123"
+        body = r.json()
+        assert body["error"] == "stream error"
+        assert body["partial_result"] == "chunk1chunk2"
+
+
+def test_evaluation_mode_non_streaming_error_returns_trace_id_header(patch_helpers):
+    """Test that evaluation mode with non-streaming error returns trace-id header."""
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        raise RuntimeError("handler error")
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 500
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-123"
+        assert r.json()["detail"] == "Internal server error"
+
+
+def test_non_evaluation_streaming_still_works(patch_helpers):
+    """Test that non-evaluation streaming still streams normally."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield "hello"
+        yield " "
+        yield "world"
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        # Without evaluation-id header, should stream normally
+        with client.stream("POST", "/run", json={"test": 1}) as resp:
+            assert resp.status_code == 200
+            # Should NOT have trace-id header (streaming response)
+            assert resp.headers.get("X-Gradient-Trace-Id") is None
+            body = "".join(chunk for chunk in resp.iter_text())
+            assert body == "hello world"
 
 
 def test_shutdown_event_calls_tracker_aclose(patch_helpers):
