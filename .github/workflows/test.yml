@@ -42,6 +42,8 @@ jobs:
   cli-integration-tests:
     name: CLI Integration Tests
     runs-on: ubuntu-latest
+    # CLI tests may need secrets/API tokens for some tests (logs, traces)
+    if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -63,6 +65,11 @@ jobs:
           pip install pytest pytest-cov pyyaml
 
       - name: Run CLI integration tests
+        env:
+          DIGITALOCEAN_API_TOKEN: ${{ secrets.TEST_DIGITALOCEAN_API_TOKEN }}
+          TEST_DIGITALOCEAN_API_TOKEN: ${{ secrets.TEST_DIGITALOCEAN_API_TOKEN }}
+          TEST_AGENT_WORKSPACE_NAME: ${{ secrets.TEST_AGENT_WORKSPACE_NAME }}
+          TEST_AGENT_DEPLOYMENT_NAME: ${{ secrets.TEST_AGENT_DEPLOYMENT_NAME }}
         run: |
           pytest integration_tests/ -m cli -v --maxfail=1
 
@@ -93,7 +100,10 @@ jobs:
 
       - name: Run E2E tests
         env:
+          DIGITALOCEAN_API_TOKEN: ${{ secrets.TEST_DIGITALOCEAN_API_TOKEN }}
           TEST_DIGITALOCEAN_API_TOKEN: ${{ secrets.TEST_DIGITALOCEAN_API_TOKEN }}
+          TEST_AGENT_WORKSPACE_NAME: ${{ secrets.TEST_AGENT_WORKSPACE_NAME }}
+          TEST_AGENT_DEPLOYMENT_NAME: ${{ secrets.TEST_AGENT_DEPLOYMENT_NAME }}
           GRADIENT_MODEL_ACCESS_KEY: ${{ secrets.GRADIENT_MODEL_ACCESS_KEY }}
         run: |
           pytest integration_tests/ -m e2e -v --maxfail=1
