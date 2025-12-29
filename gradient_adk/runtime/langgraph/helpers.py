@@ -29,12 +29,12 @@ def capture_graph() -> None:
     ws = config_reader.get_agent_name()
     dep = config_reader.get_agent_environment()
 
-    setup_digitalocean_interception()
     _TRACKER = DigitalOceanTracesTracker(
         client=AsyncDigitalOceanGenAI(api_token=api_token),
         agent_workspace_name=ws,
         agent_deployment_name=dep,
     )
+    setup_digitalocean_interception()
     LangGraphInstrumentor().install(_TRACKER)
     _INSTALLED = True
 
