@@ -1,5 +1,4 @@
 from __future__ import annotations
-import importlib.metadata
 import os
 import threading
 import json
@@ -8,10 +7,11 @@ import httpx, requests
 
 
 def _get_adk_version() -> str:
-    """Get the ADK version from package metadata."""
+    """Get the ADK version from package."""
     try:
-        return importlib.metadata.version("gradient-adk")
-    except importlib.metadata.PackageNotFoundError:
+        from gradient_adk import __version__
+        return __version__
+    except ImportError:
         return "unknown"
 
 
@@ -367,8 +367,10 @@ def create_adk_user_agent_hook(version: str, url_patterns: List[str]) -> Request
     """
     Factory to create a User-Agent hook for specific URL patterns.
 
-    Appends ADK version and optional deployment UUID to the User-Agent header
+    Completely replaces the User-Agent header with the Gradient ADK identifier
     for requests matching the specified URL patterns.
+
+    Format: Gradient/adk/{version} or Gradient/adk/{version}/{uuid}
 
     Args:
         version: The ADK version string (e.g., "0.0.5")
@@ -383,19 +385,17 @@ def create_adk_user_agent_hook(version: str, url_patterns: List[str]) -> Request
         if not any(pattern in url for pattern in url_patterns):
             return headers
 
-        # Get existing User-Agent (check both cases)
-        existing_ua = headers.get("User-Agent", headers.get("user-agent", ""))
-        
-        # Remove old keys (both cases) to avoid duplicates when httpx normalizes headers
+        # Remove old User-Agent keys (both cases) to avoid duplicates
         headers.pop("User-Agent", None)
         headers.pop("user-agent", None)
         
-        suffix = f"adk-{version}"
+        # Build new User-Agent: Gradient/adk/{version} or Gradient/adk/{version}/{uuid}
+        user_agent = f"Gradient/adk/{version}"
         deployment_uuid = os.environ.get("AGENT_WORKSPACE_DEPLOYMENT_UUID")
         if deployment_uuid:
-            suffix += f"/{deployment_uuid}"
+            user_agent += f"/{deployment_uuid}"
 
-        headers["User-Agent"] = f"{existing_ua} {suffix}" if existing_ua else suffix
+        headers["User-Agent"] = user_agent
         return headers
 
     return hook

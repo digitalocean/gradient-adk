@@ -320,7 +320,7 @@ def test_apply_request_hooks_error_handling(intr):
 
 
 def test_create_adk_user_agent_hook_matching_url():
-    """Test that the hook modifies User-Agent for matching URLs."""
+    """Test that the hook completely replaces User-Agent for matching URLs."""
     hook = create_adk_user_agent_hook(
         version="1.2.3", url_patterns=["api.example.com", "api.test.com"]
     )
@@ -328,7 +328,8 @@ def test_create_adk_user_agent_hook_matching_url():
     headers = {"User-Agent": "MyClient/1.0"}
     result = hook("https://api.example.com/v1/chat", headers)
 
-    assert result["User-Agent"] == "MyClient/1.0 adk-1.2.3"
+    # Should completely replace, not append
+    assert result["User-Agent"] == "Gradient/adk/1.2.3"
 
 
 def test_create_adk_user_agent_hook_non_matching_url():
@@ -349,7 +350,7 @@ def test_create_adk_user_agent_hook_no_existing_user_agent():
     headers = {}
     result = hook("https://api.test/endpoint", headers)
 
-    assert result["User-Agent"] == "adk-2.0.0"
+    assert result["User-Agent"] == "Gradient/adk/2.0.0"
 
 
 def test_create_adk_user_agent_hook_with_deployment_uuid(monkeypatch):
@@ -361,7 +362,8 @@ def test_create_adk_user_agent_hook_with_deployment_uuid(monkeypatch):
     headers = {"User-Agent": "Client/1.0"}
     result = hook("https://api.example/v1", headers)
 
-    assert result["User-Agent"] == "Client/1.0 adk-1.0.0/deploy-abc-123"
+    # Format: Gradient/adk/{version}/{uuid}
+    assert result["User-Agent"] == "Gradient/adk/1.0.0/deploy-abc-123"
 
 
 def test_create_adk_user_agent_hook_without_deployment_uuid(monkeypatch):
@@ -373,19 +375,20 @@ def test_create_adk_user_agent_hook_without_deployment_uuid(monkeypatch):
     headers = {"User-Agent": "Client/1.0"}
     result = hook("https://api.example/v1", headers)
 
-    assert result["User-Agent"] == "Client/1.0 adk-1.0.0"
+    # Format: Gradient/adk/{version} - completely replaces original
+    assert result["User-Agent"] == "Gradient/adk/1.0.0"
 
 
 def test_create_adk_user_agent_hook_lowercase_user_agent():
-    """Test that the hook handles lowercase 'user-agent' header."""
+    """Test that the hook handles lowercase 'user-agent' header and replaces it."""
     hook = create_adk_user_agent_hook(version="1.0.0", url_patterns=["api.test"])
 
     # Some HTTP libraries use lowercase headers
     headers = {"user-agent": "LowercaseClient/1.0"}
     result = hook("https://api.test/endpoint", headers)
 
-    # Should add to the existing value and remove old lowercase key
-    assert result["User-Agent"] == "LowercaseClient/1.0 adk-1.0.0"
+    # Should completely replace with Gradient format and remove old lowercase key
+    assert result["User-Agent"] == "Gradient/adk/1.0.0"
     # Old lowercase key should be removed to avoid duplicates
     assert "user-agent" not in result
 
@@ -398,8 +401,8 @@ def test_create_adk_user_agent_hook_removes_duplicate_keys():
     headers = {"user-agent": "AsyncGradient/Python/3.10.1", "other-header": "value"}
     result = hook("https://api.test/endpoint", headers)
 
-    # Should have only one User-Agent key (normalized to mixed case)
-    assert result["User-Agent"] == "AsyncGradient/Python/3.10.1 adk-1.0.0"
+    # Should completely replace with Gradient format
+    assert result["User-Agent"] == "Gradient/adk/1.0.0"
     assert "user-agent" not in result
     assert result["other-header"] == "value"
     # Count keys to ensure no duplicates
@@ -463,6 +466,5 @@ def test_setup_digitalocean_interception_registers_ua_hook():
     headers = {"User-Agent": "TestClient/1.0"}
     result = intr._apply_request_hooks("https://inference.do-ai.run/v1/chat", headers)
 
-    # Should have appended adk-{version}
-    assert "adk-" in result["User-Agent"]
-    assert result["User-Agent"].startswith("TestClient/1.0 adk-")
+    # Should completely replace with Gradient/adk/{version} format
+    assert result["User-Agent"].startswith("Gradient/adk/")
