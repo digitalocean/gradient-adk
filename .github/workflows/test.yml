@@ -71,7 +71,7 @@ jobs:
           TEST_AGENT_WORKSPACE_NAME: ${{ secrets.TEST_AGENT_WORKSPACE_NAME }}
           TEST_AGENT_DEPLOYMENT_NAME: ${{ secrets.TEST_AGENT_DEPLOYMENT_NAME }}
         run: |
-          pytest integration_tests/ -m cli -v --maxfail=1
+          pytest integration_tests/ -m "cli and not e2e" -v --maxfail=1
 
   e2e-tests:
     name: E2E Tests
