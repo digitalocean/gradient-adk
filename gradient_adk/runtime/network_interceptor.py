@@ -383,7 +383,13 @@ def create_adk_user_agent_hook(version: str, url_patterns: List[str]) -> Request
         if not any(pattern in url for pattern in url_patterns):
             return headers
 
+        # Get existing User-Agent (check both cases)
         existing_ua = headers.get("User-Agent", headers.get("user-agent", ""))
+        
+        # Remove old keys (both cases) to avoid duplicates when httpx normalizes headers
+        headers.pop("User-Agent", None)
+        headers.pop("user-agent", None)
+        
         suffix = f"adk-{version}"
         deployment_uuid = os.environ.get("AGENT_WORKSPACE_DEPLOYMENT_UUID")
         if deployment_uuid:

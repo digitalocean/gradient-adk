@@ -384,8 +384,27 @@ def test_create_adk_user_agent_hook_lowercase_user_agent():
     headers = {"user-agent": "LowercaseClient/1.0"}
     result = hook("https://api.test/endpoint", headers)
 
-    # Should add to the existing value
+    # Should add to the existing value and remove old lowercase key
     assert result["User-Agent"] == "LowercaseClient/1.0 adk-1.0.0"
+    # Old lowercase key should be removed to avoid duplicates
+    assert "user-agent" not in result
+
+
+def test_create_adk_user_agent_hook_removes_duplicate_keys():
+    """Test that the hook removes both cases to avoid duplicate headers."""
+    hook = create_adk_user_agent_hook(version="1.0.0", url_patterns=["api.test"])
+
+    # Test with lowercase key (common in gradient/openai SDK)
+    headers = {"user-agent": "AsyncGradient/Python/3.10.1", "other-header": "value"}
+    result = hook("https://api.test/endpoint", headers)
+
+    # Should have only one User-Agent key (normalized to mixed case)
+    assert result["User-Agent"] == "AsyncGradient/Python/3.10.1 adk-1.0.0"
+    assert "user-agent" not in result
+    assert result["other-header"] == "value"
+    # Count keys to ensure no duplicates
+    user_agent_keys = [k for k in result.keys() if k.lower() == "user-agent"]
+    assert len(user_agent_keys) == 1
 
 
 # ---- Integration Tests for Hooks with Interception ----
