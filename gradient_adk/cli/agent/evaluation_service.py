@@ -1,8 +1,10 @@
 from __future__ import annotations
 import os
 import asyncio
+import csv
+import json
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 import httpx
 
 from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
@@ -24,6 +26,107 @@ from gradient_adk.digital_ocean_api.models import (
 from gradient_adk.logging import get_logger
 
 logger = get_logger(__name__)
+
+
+class DatasetValidationError:
+    """Represents a validation error in the dataset."""
+
+    def __init__(self, row_number: Optional[int], message: str):
+        self.row_number = row_number
+        self.message = message
+
+    def __str__(self) -> str:
+        if self.row_number is not None:
+            return f"Row {self.row_number}: {self.message}"
+        return self.message
+
+
+def validate_evaluation_dataset(file_path: Path) -> Tuple[bool, List[DatasetValidationError]]:
+    """
+    Validate an evaluation dataset CSV file.
+
+    Checks:
+    1. File exists and is a CSV file
+    2. CSV has a 'query' column (case-sensitive)
+    3. Each value in the 'query' column is valid JSON
+
+    Args:
+        file_path: Path to the CSV dataset file
+
+    Returns:
+        Tuple of (is_valid, list of validation errors)
+    """
+    errors: List[DatasetValidationError] = []
+
+    # Check file exists
+    if not file_path.exists():
+        errors.append(DatasetValidationError(None, f"File not found: {file_path}"))
+        return False, errors
+
+    # Check file extension
+    if file_path.suffix.lower() != ".csv":
+        errors.append(
+            DatasetValidationError(None, f"File must be a CSV file, got: {file_path.suffix}")
+        )
+        return False, errors
+
+    # Read and validate CSV content
+    try:
+        with open(file_path, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+
+            # Check for 'query' column (case-sensitive)
+            if reader.fieldnames is None:
+                errors.append(DatasetValidationError(None, "CSV file is empty or has no header row"))
+                return False, errors
+
+            if "query" not in reader.fieldnames:
+                errors.append(
+                    DatasetValidationError(
+                        None,
+                        f"Missing required column: 'query'. Found columns: {', '.join(reader.fieldnames)}"
+                    )
+                )
+                return False, errors
+
+            # Validate each row's 'query' column is valid JSON
+            for row_num, row in enumerate(reader, start=2):  # Start at 2 (header is row 1)
+                query_value = row.get("query", "")
+
+                if not query_value or not query_value.strip():
+                    errors.append(
+                        DatasetValidationError(
+                            row_num, "Empty value in 'query' column"
+                        )
+                    )
+                    continue
+
+                # Try to parse as JSON
+                try:
+                    json.loads(query_value)
+                except json.JSONDecodeError as e:
+                    # Provide helpful error message
+                    error_msg = str(e)
+                    # Truncate the value for display if too long
+                    display_value = query_value[:50] + "..." if len(query_value) > 50 else query_value
+                    errors.append(
+                        DatasetValidationError(
+                            row_num,
+                            f"Invalid JSON in 'query' column: {error_msg}\n         Value: {display_value}"
+                        )
+                    )
+
+    except csv.Error as e:
+        errors.append(DatasetValidationError(None, f"CSV parsing error: {e}"))
+        return False, errors
+    except UnicodeDecodeError as e:
+        errors.append(DatasetValidationError(None, f"File encoding error (expected UTF-8): {e}"))
+        return False, errors
+    except Exception as e:
+        errors.append(DatasetValidationError(None, f"Error reading file: {e}"))
+        return False, errors
+
+    return len(errors) == 0, errors
 
 
 class EvaluationService:

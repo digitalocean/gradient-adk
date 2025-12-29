@@ -8,7 +8,7 @@ from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigMan
 from gradient_adk.cli.agent.deployment.deploy_service import AgentDeployService
 from gradient_adk.cli.agent.direct_launch_service import DirectLaunchService
 from gradient_adk.cli.agent.traces_service import GalileoTracesService
-from gradient_adk.cli.agent.evaluation_service import EvaluationService
+from gradient_adk.cli.agent.evaluation_service import EvaluationService, validate_evaluation_dataset
 from gradient_adk.cli.agent.env_utils import get_do_api_token, EnvironmentError
 
 
@@ -285,6 +285,19 @@ def agent_deploy(
         agent_deployment_name = _agent_config_manager.get_agent_environment()
         entrypoint_file = _agent_config_manager.get_entrypoint_file()
 
+        # Check if configuration exists
+        if not agent_workspace_name or not agent_deployment_name or not entrypoint_file:
+            typer.echo("❌ Agent configuration not found.", err=True)
+            typer.echo(
+                "\nNo .gradient/agent.yml configuration file found in the current directory.",
+                err=True,
+            )
+            typer.echo("\nTo configure your agent, run:", err=True)
+            typer.echo("  gradient agent configure", err=True)
+            typer.echo("\nOr to create a new agent from scratch:", err=True)
+            typer.echo("  gradient agent init", err=True)
+            raise typer.Exit(1)
+
         # Validate names follow requirements (alphanumeric, hyphens, underscores only)
         import re
 
@@ -429,11 +442,23 @@ def agent_traces(
     """Open the DigitalOcean traces UI for monitoring agent execution."""
     import asyncio
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+    from gradient_adk.digital_ocean_api.errors import DOAPIClientError
 
     try:
         # Get configuration
         agent_workspace_name = _agent_config_manager.get_agent_name()
         agent_deployment_name = _agent_config_manager.get_agent_environment()
+
+        # Check if configuration exists
+        if not agent_workspace_name or not agent_deployment_name:
+            typer.echo("❌ Agent configuration not found.", err=True)
+            typer.echo(
+                "\nNo .gradient/agent.yml configuration file found in the current directory.",
+                err=True,
+            )
+            typer.echo("\nTo configure your agent, run:", err=True)
+            typer.echo("  gradient agent configure", err=True)
+            raise typer.Exit(1)
 
         # Get API token
         if not api_token:
@@ -462,8 +487,33 @@ def agent_traces(
         typer.echo("\nTo set your token permanently:", err=True)
         typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
+    except DOAPIClientError as e:
+        if e.status_code == 404:
+            typer.echo(
+                f"❌ Agent '{agent_workspace_name}/{agent_deployment_name}' not found.",
+                err=True,
+            )
+            typer.echo(
+                "\nThe agent may not be deployed yet. Deploy your agent first with:",
+                err=True,
+            )
+            typer.echo("  gradient agent deploy", err=True)
+        else:
+            typer.echo(f"❌ Failed to open traces UI: {e}", err=True)
+        raise typer.Exit(1)
+    except ValueError as e:
+        # ValueError is raised by GalileoTracesService when workspace not found
+        error_msg = str(e)
+        if "not deployed" in error_msg.lower():
+            typer.echo(f"❌ {error_msg}", err=True)
+            typer.echo("\nDeploy your agent first with:", err=True)
+            typer.echo("  gradient agent deploy", err=True)
+        else:
+            typer.echo(f"❌ Failed to open traces UI: {error_msg}", err=True)
+        raise typer.Exit(1)
     except Exception as e:
-        typer.echo(f"❌ Failed to open traces UI: {e}", err=True)
+        error_msg = str(e) if str(e) else repr(e)
+        typer.echo(f"❌ Failed to open traces UI: {error_msg}", err=True)
         raise typer.Exit(1)
 
 
@@ -480,15 +530,31 @@ def agent_logs(
     """View runtime logs for the deployed agent."""
     import asyncio
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+    from gradient_adk.digital_ocean_api.errors import DOAPIClientError
 
     try:
         # Get configuration
         agent_workspace_name = _agent_config_manager.get_agent_name()
         agent_deployment_name = _agent_config_manager.get_agent_environment()
 
+        # Check if configuration exists
+        if not agent_workspace_name or not agent_deployment_name:
+            typer.echo("❌ Agent configuration not found.", err=True)
+            typer.echo(
+                "\nNo .gradient/agent.yml configuration file found in the current directory.",
+                err=True,
+            )
+            typer.echo("\nTo configure your agent, run:", err=True)
+            typer.echo("  gradient agent configure", err=True)
+            raise typer.Exit(1)
+
         # Get API token
         if not api_token:
             api_token = get_do_api_token()
+
+        typer.echo(
+            f"📋 Fetching logs for {agent_workspace_name}/{agent_deployment_name}..."
+        )
 
         # Create async function to use context manager
         async def fetch_logs():
@@ -501,6 +567,7 @@ def agent_logs(
                 return logs
 
         logs = asyncio.run(fetch_logs())
+        typer.echo()
         typer.echo(logs)
 
     except EnvironmentError as e:
@@ -508,8 +575,23 @@ def agent_logs(
         typer.echo("\nTo set your token:", err=True)
         typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
+    except DOAPIClientError as e:
+        if e.status_code == 404:
+            typer.echo(
+                f"❌ Agent '{agent_workspace_name}/{agent_deployment_name}' not found.",
+                err=True,
+            )
+            typer.echo(
+                "\nThe agent may not be deployed yet. Deploy your agent first with:",
+                err=True,
+            )
+            typer.echo("  gradient agent deploy", err=True)
+        else:
+            typer.echo(f"❌ Failed to fetch logs: {e}", err=True)
+        raise typer.Exit(1)
     except Exception as e:
-        typer.echo(f"❌ Failed to fetch logs: {e}", err=True)
+        error_msg = str(e) if str(e) else repr(e)
+        typer.echo(f"❌ Failed to fetch logs: {error_msg}", err=True)
         raise typer.Exit(1)
 
 
@@ -561,6 +643,29 @@ def agent_evaluate(
         if not api_token:
             api_token = get_do_api_token()
 
+        # Helper function to validate and prompt for dataset file
+        def prompt_and_validate_dataset() -> str:
+            """Prompt for dataset file path and validate it. Re-prompts on error."""
+            nonlocal dataset_file
+            
+            while True:
+                if dataset_file is None:
+                    dataset_file = typer.prompt("Dataset file path")
+                
+                dataset_path = Path(dataset_file)
+                is_valid, errors = validate_evaluation_dataset(dataset_path)
+                
+                if is_valid:
+                    return dataset_file
+                else:
+                    typer.echo()
+                    typer.echo("❌ Dataset validation failed:", err=True)
+                    for error in errors:
+                        typer.echo(f"  • {error}", err=True)
+                    typer.echo()
+                    # Reset dataset_file to prompt again
+                    dataset_file = None
+
         # Create async function to handle interactive prompts with API access
         async def get_interactive_inputs():
             async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
@@ -571,8 +676,23 @@ def agent_evaluate(
 
                 if test_case_name is None:
                     test_case_name = typer.prompt("Evaluation test case name")
-                if dataset_file is None:
-                    dataset_file = typer.prompt("Dataset file path")
+                
+                # Validate dataset file immediately when prompting
+                if dataset_file is None or not Path(dataset_file).exists():
+                    prompt_and_validate_dataset()
+                else:
+                    # Validate provided dataset file
+                    dataset_path = Path(dataset_file)
+                    is_valid, errors = validate_evaluation_dataset(dataset_path)
+                    if not is_valid:
+                        typer.echo()
+                        typer.echo("❌ Dataset validation failed:", err=True)
+                        for error in errors:
+                            typer.echo(f"  • {error}", err=True)
+                        typer.echo()
+                        # Prompt for a new file
+                        dataset_file = None
+                        prompt_and_validate_dataset()
 
                 if categories is None:
                     typer.echo()
@@ -669,17 +789,14 @@ def agent_evaluate(
         # Parse categories
         metric_categories = [cat.strip() for cat in categories.split(",")]
 
-        # Validate dataset file path
+        # Validate dataset file (for non-interactive mode or final validation)
         dataset_path = Path(dataset_file)
-        if not dataset_path.exists():
-            typer.echo(f"❌ Dataset file not found: {dataset_file}", err=True)
-            raise typer.Exit(1)
-
-        if dataset_path.suffix.lower() != ".csv":
-            typer.echo(
-                f"❌ Dataset file must be a CSV file, got: {dataset_path.suffix}",
-                err=True,
-            )
+        is_valid, errors = validate_evaluation_dataset(dataset_path)
+        if not is_valid:
+            typer.echo()
+            typer.echo("❌ Dataset validation failed:", err=True)
+            for error in errors:
+                typer.echo(f"  • {error}", err=True)
             raise typer.Exit(1)
 
         typer.echo(
