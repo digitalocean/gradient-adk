@@ -4,6 +4,7 @@ Integration tests for the `gradient agent logs` CLI command.
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +12,12 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
 
 
 class TestADKAgentsLogsValidation:
@@ -252,9 +259,9 @@ class TestADKAgentsLogsHelp:
 
         assert result.returncode == 0, "Help command should succeed"
 
-        combined_output = result.stdout + result.stderr
+        combined_output = strip_ansi_codes(result.stdout + result.stderr)
         # Check for expected options in help
-        assert "--api-token" in combined_output, "Should show --api-token option"
+        assert "--api-token" in combined_output, f"Should show --api-token option. Got: {combined_output}"
         assert "runtime logs" in combined_output.lower() or "logs" in combined_output.lower(), \
             "Should describe logs functionality"
 

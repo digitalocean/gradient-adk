@@ -4,6 +4,7 @@ Integration tests for the `gradient agent evaluate` CLI command.
 
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -11,6 +12,12 @@ from pathlib import Path
 
 import pytest
 import yaml
+
+
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
 
 
 class TestADKAgentsEvaluateDatasetValidation:
@@ -308,9 +315,9 @@ class TestADKAgentsEvaluateHelp:
 
         assert result.returncode == 0, "Help command should succeed"
 
-        combined_output = result.stdout + result.stderr
+        combined_output = strip_ansi_codes(result.stdout + result.stderr)
         # Check for expected options in help
-        assert "--test-case-name" in combined_output, "Should show --test-case-name option"
+        assert "--test-case-name" in combined_output, f"Should show --test-case-name option. Got: {combined_output}"
         assert "--dataset-file" in combined_output, "Should show --dataset-file option"
         assert "--categories" in combined_output, "Should show --categories option"
         assert "--star-metric-name" in combined_output, "Should show --star-metric-name option"

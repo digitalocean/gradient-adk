@@ -3,12 +3,20 @@ Integration tests for the `gradient agent configure` CLI command.
 """
 
 import logging
+import os
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 
 import pytest
 import yaml
+
+
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
 
 
 class TestADKAgentsConfigure:
@@ -531,13 +539,16 @@ class TestADKAgentsConfigureHelp:
             capture_output=True,
             text=True,
             timeout=30,
+            env={**os.environ, "NO_COLOR": "1"},  # Disable colors
         )
 
         assert result.returncode == 0, "Help command should succeed"
 
-        combined_output = result.stdout + result.stderr
+        # Strip ANSI codes and check for expected options
+        combined_output = strip_ansi_codes(result.stdout + result.stderr)
         # Check for expected options in help
-        assert "--agent-workspace-name" in combined_output, "Should show --agent-workspace-name option"
+        assert "--agent-workspace-name" in combined_output, \
+            f"Should show --agent-workspace-name option. Got: {combined_output}"
         assert "--deployment-name" in combined_output, "Should show --deployment-name option"
         assert "--entrypoint-file" in combined_output, "Should show --entrypoint-file option"
         assert "--interactive" in combined_output or "--no-interactive" in combined_output, \

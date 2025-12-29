@@ -4,28 +4,20 @@ Integration tests for the `gradient agent deploy` CLI command.
 
 import logging
 import os
+import re
 import shutil
-import signal
 import subprocess
 import tempfile
-import time
 from pathlib import Path
 
 import pytest
 import yaml
 
 
-def cleanup_process(process):
-    """Clean up a process and its entire process group."""
-    if process and process.poll() is None:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            os.killpg(process.pid, signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            # Process already terminated
-            pass
+def strip_ansi_codes(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
+    return ansi_escape.sub('', text)
 
 
 class TestADKAgentsDeployValidation:
@@ -542,9 +534,9 @@ class TestADKAgentsDeployHelp:
 
         assert result.returncode == 0, "Help command should succeed"
 
-        combined_output = result.stdout + result.stderr
+        combined_output = strip_ansi_codes(result.stdout + result.stderr)
         # Check for expected options in help
-        assert "--api-token" in combined_output, "Should show --api-token option"
+        assert "--api-token" in combined_output, f"Should show --api-token option. Got: {combined_output}"
         assert "--verbose" in combined_output or "-v" in combined_output, "Should show --verbose option"
         assert "--skip-validation" in combined_output, "Should show --skip-validation option"
 
