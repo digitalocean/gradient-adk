@@ -181,11 +181,14 @@ class TestADKAgentsTracesHappyPath:
         - TEST_AGENT_DEPLOYMENT_NAME env var (name of the deployment, e.g., 'main')
         - DIGITALOCEAN_API_TOKEN or TEST_DIGITALOCEAN_API_TOKEN env var
         
-        Note: This test will attempt to open a browser. In CI environments,
-        it may fail if no display is available, but it should still succeed
-        in making the API calls.
+        Note: This test opens a browser which hangs in CI environments.
+        Skip in CI - use local testing for this test.
         """
         logger = logging.getLogger(__name__)
+
+        # Skip in CI environments - the traces command opens a browser which hangs
+        if os.getenv("CI"):
+            pytest.skip("Skipping traces happy path in CI - browser opening hangs without display")
 
         # Get required environment variables
         agent_workspace_name = os.getenv("TEST_AGENT_WORKSPACE_NAME")
