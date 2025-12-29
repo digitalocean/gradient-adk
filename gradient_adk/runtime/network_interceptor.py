@@ -1,4 +1,5 @@
 from __future__ import annotations
+import importlib
 import os
 import threading
 import json
@@ -7,11 +8,10 @@ import httpx, requests
 
 
 def _get_adk_version() -> str:
-    """Get the ADK version from package."""
+    """Get the version from package metadata."""
     try:
-        from gradient_adk import __version__
-        return __version__
-    except ImportError:
+        return importlib.metadata.version("gradient-adk")
+    except importlib.metadata.PackageNotFoundError:
         return "unknown"
 
 
@@ -388,7 +388,7 @@ def create_adk_user_agent_hook(version: str, url_patterns: List[str]) -> Request
         # Remove old User-Agent keys (both cases) to avoid duplicates
         headers.pop("User-Agent", None)
         headers.pop("user-agent", None)
-        
+
         # Build new User-Agent: Gradient/adk/{version} or Gradient/adk/{version}/{uuid}
         user_agent = f"Gradient/adk/{version}"
         deployment_uuid = os.environ.get("AGENT_WORKSPACE_DEPLOYMENT_UUID")
