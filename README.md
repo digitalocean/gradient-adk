@@ -102,9 +102,13 @@ async def main(input: dict, context: dict):
     return result["output"]
 ```
 
-### Using Custom Decorators (Any Framework)
+### Manual Trace and Span Capture
 
-For frameworks beyond LangGraph, use trace decorators to capture custom spans:
+For frameworks beyond LangGraph, you can manually capture traces using either **decorators** (wrap functions) or **functions** (record spans after execution).
+
+#### Using Decorators
+
+Use `@trace_llm`, `@trace_tool`, and `@trace_retriever` decorators to automatically capture spans when functions are called:
 
 ```python
 from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever
@@ -117,7 +121,7 @@ async def search_knowledge_base(query: str):
 
 @trace_llm("generate_response")
 async def generate_response(prompt: str):
-    # LLM spans capture model calls with token usage
+    # LLM spans capture model calls
     response = await llm.generate(prompt)
     return response
 
@@ -131,6 +135,36 @@ async def main(input: dict, context: dict):
     docs = await search_knowledge_base(input["query"])
     result = await calculate(5, 10)
     response = await generate_response(f"Context: {docs}")
+    return response
+```
+
+#### Using Functions
+
+Use `add_llm_span`, `add_tool_span`, and `add_retriever_span` functions to manually record spans after execution. This is useful when you can't wrap a function with a decorator or need more control over what gets recorded:
+
+```python
+from gradient_adk import entrypoint, add_llm_span, add_tool_span, add_retriever_span
+
+@entrypoint
+async def main(input: dict, context: dict):
+    # Perform retrieval and record the span
+    results = await vector_db.search(input["query"])
+    add_retriever_span("vector_search", inputs={"query": input["query"]}, output=results)
+    
+    # Perform calculation and record the span
+    result = 5 + 10
+    add_tool_span("calculate", inputs={"x": 5, "y": 10}, output=result)
+    
+    # Call LLM and record with additional metadata
+    response = await llm.generate(f"Context: {results}")
+    add_llm_span(
+        "generate_response",
+        inputs={"prompt": f"Context: {results}"},
+        output=response,
+        model_name="gpt-4",      # Optional: model name
+        ttft_ms=150.5,           # Optional: time to first token
+    )
+    
     return response
 ```
 
@@ -204,7 +238,9 @@ The ADK runtime automatically captures detailed traces:
 - **Errors**: Full exception details and stack traces
 - **Streaming Responses**: Individual chunks and aggregated outputs
 
-### Available Decorators
+### Available Decorators and Functions
+
+**Decorators** - Wrap functions to automatically capture spans:
 ```python
 from gradient_adk import trace_llm, trace_tool, trace_retriever
 
@@ -213,7 +249,17 @@ from gradient_adk import trace_llm, trace_tool, trace_retriever
 @trace_retriever("db_search")  # For retrieval/search operations
 ```
 
-These decorators are used to log steps or spans of your agent workflow that are not automatically captured.  These will log things like the input, output, and step duration and make them available in your agent's traces and for use in agent evaluations.
+**Functions** - Manually record spans after execution:
+```python
+from gradient_adk import add_llm_span, add_tool_span, add_retriever_span
+
+# Record spans with name, inputs, and output
+add_llm_span("model_call", inputs={"prompt": "..."}, output="response", model_name="gpt-4")
+add_tool_span("calculator", inputs={"x": 5, "y": 10}, output=15)
+add_retriever_span("db_search", inputs={"query": "..."}, output=[...])
+```
+
+These are used to log steps or spans of your agent workflow that are not automatically captured. They will log things like the input, output, and step duration and make them available in your agent's traces and for use in agent evaluations.
 
 ### Viewing Traces
 Traces are:
@@ -232,20 +278,6 @@ export GRADIENT_MODEL_ACCESS_KEY=your_gradient_key
 
 # Optional: Enable verbose trace logging
 export GRADIENT_VERBOSE=1
-```
-
-## Project Structure
-
-```
-my-agent/
-├── main.py              # Agent entrypoint with @entrypoint decorator
-├── .gradient/agent.yml  # Agent configuration (auto-generated)
-├── requirements.txt     # Python dependencies
-├── .env                 # Environment variables (not committed)
-├── agents/              # Agent implementations
-│   └── my_agent.py
-└── tools/               # Custom tools
-    └── my_tool.py
 ```
 
 ## Framework Compatibility
