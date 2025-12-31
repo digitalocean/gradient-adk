@@ -1,9 +1,10 @@
-"""Tracing decorators for manual span tracking.
+"""Tracing decorators and functions for manual span tracking.
 
-These decorators allow developers to instrument their custom agent functions
-with the same kind of tracing automatically provided for some other frameworks.
+These decorators and functions allow developers to instrument their custom agent
+functions with the same kind of tracing automatically provided for some other
+frameworks.
 
-Example usage:
+Decorator-based usage:
     from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever
 
     @trace_retriever("fetch_data")
@@ -26,6 +27,28 @@ Example usage:
         data = await fetch_data(input["query"])
         result = await calculate(5, 10)
         response = await call_model(data["prompt"])
+        return {"response": response}
+
+Function-based usage (for manual span creation):
+    from gradient_adk import entrypoint, add_llm_span, add_tool_span, add_retriever_span
+
+    @entrypoint
+    async def my_agent(input: dict, context: dict):
+        # Do work and then record spans manually
+        query = input["query"]
+
+        # Record a retriever span
+        results = await fetch_documents(query)
+        add_retriever_span("fetch_docs", inputs={"query": query}, output=results)
+
+        # Record a tool span
+        calculation = calculate(5, 10)
+        add_tool_span("calculate", inputs={"x": 5, "y": 10}, output=calculation)
+
+        # Record an LLM span
+        response = await call_llm(results)
+        add_llm_span("generate_response", inputs={"context": results}, output=response)
+
         return {"response": response}
 """
 
@@ -443,3 +466,160 @@ def trace_tool(name: Optional[str] = None) -> Callable[[F], F]:
             return results
     """
     return _trace_base(name, span_type=SpanType.TOOL)
+
+
+def _add_span(
+    name: str,
+    inputs: Any,
+    output: Any,
+    span_type: SpanType,
+    extra_metadata: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Internal helper to add a completed span to the tracker.
+
+    Args:
+        name: Name for the span.
+        inputs: The inputs to record for this span.
+        output: The output to record for this span.
+        span_type: Type of span (LLM, TOOL, or RETRIEVER).
+        extra_metadata: Additional metadata fields to attach to the span.
+    """
+    tracker = get_tracker()
+    if not tracker:
+        # No tracker available, silently skip
+        return
+
+    # Snapshot inputs and output
+    inputs_snapshot = _freeze(inputs)
+    output_snapshot = _freeze(output)
+
+    # Create span
+    span = _create_span(name, inputs_snapshot)
+
+    # Mark span type
+    meta = _ensure_meta(span)
+    if span_type == SpanType.LLM:
+        meta["is_llm_call"] = True
+    elif span_type == SpanType.TOOL:
+        meta["is_tool_call"] = True
+    elif span_type == SpanType.RETRIEVER:
+        meta["is_retriever_call"] = True
+
+    # Add any extra metadata
+    if extra_metadata:
+        for key, value in extra_metadata.items():
+            meta[key] = value
+
+    # Record start and end
+    tracker.on_node_start(span)
+    tracker.on_node_end(span, output_snapshot)
+
+
+def add_llm_span(
+    name: str,
+    inputs: Any,
+    output: Any,
+    *,
+    model_name: Optional[str] = None,
+    ttft_ms: Optional[float] = None,
+    **extra_metadata: Any,
+) -> None:
+    """
+    Add an LLM call span with the given name, inputs, and output.
+
+    Use this function to manually record an LLM call span.
+
+    Args:
+        name: Name for the span (e.g., "openai_call", "generate_response").
+        inputs: The inputs to the LLM call (e.g., prompt, messages).
+        output: The output from the LLM call (e.g., response text).
+        model_name: Optional name of the LLM model used.
+        ttft_ms: Optional time to first token in milliseconds.
+        **extra_metadata: Any additional metadata fields to attach to the span.
+
+    Example:
+        response = await call_llm(prompt)
+        add_llm_span(
+            "generate_response",
+            inputs={"prompt": prompt},
+            output=response,
+            model_name="gpt-4",
+            ttft_ms=150.5,
+            temperature=0.7,
+        )
+    """
+    metadata: Dict[str, Any] = {}
+    if model_name is not None:
+        metadata["model_name"] = model_name
+    if ttft_ms is not None:
+        metadata["ttft_ms"] = ttft_ms
+    metadata.update(extra_metadata)
+
+    _add_span(name, inputs, output, SpanType.LLM, metadata if metadata else None)
+
+
+def add_retriever_span(
+    name: str,
+    inputs: Any,
+    output: Any,
+    **extra_metadata: Any,
+) -> None:
+    """
+    Add a retriever call span with the given name, inputs, and output.
+
+    Use this function to manually record a retriever span without using a decorator.
+
+    Args:
+        name: Name for the span (e.g., "vector_search", "fetch_docs").
+        inputs: The inputs to the retriever (e.g., query, filters).
+        output: The output from the retriever (e.g., list of documents).
+        **extra_metadata: Any additional metadata fields to attach to the span.
+
+    Example:
+        results = await fetch_documents(query)
+        add_retriever_span(
+            "fetch_docs",
+            inputs={"query": query},
+            output=results,
+            num_results=len(results),
+        )
+    """
+    _add_span(
+        name,
+        inputs,
+        output,
+        SpanType.RETRIEVER,
+        extra_metadata if extra_metadata else None,
+    )
+
+
+def add_tool_span(
+    name: str,
+    inputs: Any,
+    output: Any,
+    **extra_metadata: Any,
+) -> None:
+    """
+    Add a tool call span with the given name, inputs, and output.
+
+    Use this function to manually record a tool call span without using a decorator.
+
+    Args:
+        name: Name for the span (e.g., "calculate", "search_database").
+        inputs: The inputs to the tool (e.g., parameters).
+        output: The output from the tool (e.g., result).
+        **extra_metadata: Any additional metadata fields to attach to the span.
+
+    Example:
+        result = calculate(5, 10)
+        add_tool_span(
+            "calculate",
+            inputs={"x": 5, "y": 10},
+            output=result,
+            execution_time_ms=12.5,
+        )
+    """
+    _add_span(
+        name, inputs, output, SpanType.TOOL, extra_metadata if extra_metadata else None
+    )
