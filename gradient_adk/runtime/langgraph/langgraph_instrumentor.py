@@ -12,7 +12,11 @@ from langgraph.graph import StateGraph
 
 from ..interfaces import NodeExecution
 from ..digitalocean_tracker import DigitalOceanTracesTracker
-from ..network_interceptor import get_network_interceptor
+from ..network_interceptor import (
+    get_network_interceptor,
+    is_inference_url,
+    is_kbaas_url,
+)
 
 
 WRAPPED_FLAG = "__do_wrapped__"
@@ -232,17 +236,50 @@ def _had_hits_since(intr, token) -> bool:
         return False
 
 
-def _get_captured_payloads(intr, token) -> tuple:
-    """Get captured API request/response payloads if available (e.g., for LLM calls)."""
+def _get_captured_payloads_with_type(intr, token) -> tuple:
+    """Get captured API request/response payloads and classify the call type.
+
+    Returns:
+        (request_payload, response_payload, is_llm, is_retriever)
+    """
     try:
         captured = intr.get_captured_requests_since(token)
         if captured:
             # Use the first captured request (most common case)
             call = captured[0]
-            return call.request_payload, call.response_payload
+            url = call.url
+            is_llm = is_inference_url(url)
+            is_retriever = is_kbaas_url(url)
+            return call.request_payload, call.response_payload, is_llm, is_retriever
     except Exception:
         pass
-    return None, None
+    return None, None, False, False
+
+
+def _transform_kbaas_response(response: Optional[Dict[str, Any]]) -> Optional[list]:
+    """Transform KBaaS response to standard retriever format.
+
+    Extracts results and converts 'text_content' to 'page_content'.
+    Returns a list of dicts as expected for retriever spans.
+    """
+    if not isinstance(response, dict):
+        return response
+
+    results = response.get("results", [])
+    if not isinstance(results, list):
+        return response
+
+    transformed_results = []
+    for item in results:
+        if isinstance(item, dict) and "text_content" in item:
+            new_item = dict(item)
+            new_item["page_content"] = new_item.pop("text_content")
+            transformed_results.append(new_item)
+        else:
+            transformed_results.append(item)
+
+    # Return just the array of results
+    return transformed_results
 
 
 class LangGraphInstrumentor:
@@ -280,20 +317,33 @@ class LangGraphInstrumentor:
             # (_wrap_async_func, _wrap_sync_func, etc.) BEFORE calling _finish_ok.
             # The wrappers collect streamed content and pass {"content": "..."} here.
 
-            # Check if this node made any tracked API calls (e.g., LLM inference)
+            # Check if this node made any tracked API calls (e.g., LLM inference or KBaaS retrieval)
             if _had_hits_since(intr, tok):
-                _ensure_meta(rec)["is_llm_call"] = True
+                # Get captured payloads and classify the call type
+                api_request, api_response, is_llm, is_retriever = (
+                    _get_captured_payloads_with_type(intr, tok)
+                )
 
-                # Try to get actual API request/response payloads (for LLM calls)
-                api_request, api_response = _get_captured_payloads(intr, tok)
+                # Set metadata based on call type
+                meta = _ensure_meta(rec)
+                if is_llm:
+                    meta["is_llm_call"] = True
+                elif is_retriever:
+                    meta["is_retriever_call"] = True
+                else:
+                    # Fallback: assume LLM call for backward compatibility
+                    meta["is_llm_call"] = True
 
                 if api_request or api_response:
                     # Use actual API payloads instead of function args
                     if api_request:
                         rec.inputs = _freeze(api_request)
 
-                    # Use actual API response as output (e.g., LLM completion)
+                    # Use actual API response as output
                     if api_response:
+                        # Transform KBaaS response to standard retriever format
+                        if is_retriever:
+                            api_response = _transform_kbaas_response(api_response)
                         out_payload = _freeze(api_response)
                     else:
                         out_payload = _canonical_output(inputs_snapshot, a, kw, ret)
@@ -306,10 +356,21 @@ class LangGraphInstrumentor:
 
         def _finish_err(rec: NodeExecution, intr, tok, e: BaseException):
             if _had_hits_since(intr, tok):
-                _ensure_meta(rec)["is_llm_call"] = True
+                # Get captured payloads and classify the call type
+                api_request, _, is_llm, is_retriever = _get_captured_payloads_with_type(
+                    intr, tok
+                )
 
-                # Try to get actual API request payload even on error
-                api_request, _ = _get_captured_payloads(intr, tok)
+                # Set metadata based on call type
+                meta = _ensure_meta(rec)
+                if is_llm:
+                    meta["is_llm_call"] = True
+                elif is_retriever:
+                    meta["is_retriever_call"] = True
+                else:
+                    # Fallback: assume LLM call for backward compatibility
+                    meta["is_llm_call"] = True
+
                 if api_request:
                     rec.inputs = _freeze(api_request)
 
