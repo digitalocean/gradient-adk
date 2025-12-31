@@ -60,6 +60,11 @@ class TestADKAgentsRun:
         return Path(__file__).parent.parent / "example_agents" / "echo_agent"
 
     @pytest.fixture
+    def streaming_echo_agent_dir(self):
+        """Get the path to the streaming echo agent directory."""
+        return Path(__file__).parent.parent / "example_agents" / "streaming_echo_agent"
+
+    @pytest.fixture
     def setup_agent_in_temp(self, echo_agent_dir):
         """
         Setup a temporary directory with the echo agent and proper configuration.
@@ -77,6 +82,33 @@ class TestADKAgentsRun:
 
             config = {
                 "agent_name": "test-echo-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+
+            with open(gradient_dir / "agent.yml", "w") as f:
+                yaml.safe_dump(config, f)
+
+            yield temp_path
+
+    @pytest.fixture
+    def setup_streaming_agent_in_temp(self, streaming_echo_agent_dir):
+        """
+        Setup a temporary directory with the streaming echo agent and proper configuration.
+        Yields the temp directory path and cleans up after.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Copy the streaming echo agent main.py
+            shutil.copy(streaming_echo_agent_dir / "main.py", temp_path / "main.py")
+
+            # Create .gradient directory and config
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+
+            config = {
+                "agent_name": "test-streaming-echo-agent",
                 "agent_environment": "main",
                 "entrypoint_file": "main.py",
             }
@@ -385,6 +417,136 @@ def main(query, context):
             data = response.json()
             assert data["echo"] == "Hello `} E1-('"
             logger.info("Unicode test passed")
+
+        finally:
+            cleanup_process(process)
+
+    @pytest.mark.cli
+    def test_streaming_agent_without_evaluation_id_streams_response(
+        self, setup_streaming_agent_in_temp
+    ):
+        """
+        Test that a streaming agent returns a streamed response when no evaluation-id header is sent.
+        Verifies:
+        - Response is streamed (text/event-stream content type)
+        - Response contains the expected content
+        """
+        logger = logging.getLogger(__name__)
+        temp_dir = setup_streaming_agent_in_temp
+        port = find_free_port()
+        process = None
+
+        try:
+            logger.info(f"Starting streaming agent on port {port} in {temp_dir}")
+
+            # Start the agent server
+            process = subprocess.Popen(
+                [
+                    "gradient",
+                    "agent",
+                    "run",
+                    "--port",
+                    str(port),
+                    "--no-dev",
+                ],
+                cwd=temp_dir,
+                start_new_session=True,
+            )
+
+            # Wait for server to be ready
+            server_ready = wait_for_server(port, timeout=30)
+            assert server_ready, "Server did not start within timeout"
+
+            # Make a streaming request WITHOUT evaluation-id header
+            with requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello, World!"},
+                stream=True,
+                timeout=30,
+            ) as response:
+                assert response.status_code == 200
+
+                # Verify it's a streaming response (text/event-stream)
+                content_type = response.headers.get("content-type", "")
+                assert "text/event-stream" in content_type, (
+                    f"Expected text/event-stream content type for streaming, got: {content_type}"
+                )
+
+                # Collect chunks to verify content
+                chunks = list(response.iter_content(decode_unicode=True))
+                full_content = "".join(c for c in chunks if c)
+
+                # Verify the content contains the expected streamed output
+                assert "Echo:" in full_content or "Hello, World!" in full_content, (
+                    f"Expected streamed content to contain prompt, got: {full_content}"
+                )
+
+                logger.info(f"Streaming response received with {len(chunks)} chunks")
+                logger.info(f"Full content: {full_content}")
+
+        finally:
+            cleanup_process(process)
+
+    @pytest.mark.cli
+    def test_streaming_agent_with_evaluation_id_returns_single_response(
+        self, setup_streaming_agent_in_temp
+    ):
+        """
+        Test that a streaming agent returns a single JSON response (not streamed)
+        when the evaluation-id header is present.
+        Verifies:
+        - Response is NOT streamed (application/json content type)
+        - Response contains the complete collected content
+        """
+        logger = logging.getLogger(__name__)
+        temp_dir = setup_streaming_agent_in_temp
+        port = find_free_port()
+        process = None
+
+        try:
+            logger.info(f"Starting streaming agent on port {port} in {temp_dir}")
+
+            # Start the agent server
+            process = subprocess.Popen(
+                [
+                    "gradient",
+                    "agent",
+                    "run",
+                    "--port",
+                    str(port),
+                    "--no-dev",
+                ],
+                cwd=temp_dir,
+                start_new_session=True,
+            )
+
+            # Wait for server to be ready
+            server_ready = wait_for_server(port, timeout=30)
+            assert server_ready, "Server did not start within timeout"
+
+            # Make a request WITH evaluation-id header
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello, World!"},
+                headers={"evaluation-id": "test-eval-123"},
+                timeout=30,
+            )
+            assert response.status_code == 200
+
+            # Verify it's NOT a streaming response (should be application/json)
+            content_type = response.headers.get("content-type", "")
+            assert "application/json" in content_type, (
+                f"Expected application/json content type for evaluation mode, got: {content_type}"
+            )
+
+            # Verify the response contains the complete content
+            result = response.json()
+            expected_content = "Echo: Hello, World! [DONE]"
+            assert result == expected_content, (
+                f"Expected complete collected content '{expected_content}', got: {result}"
+            )
+
+            logger.info(f"Single JSON response received: {result}")
 
         finally:
             cleanup_process(process)
