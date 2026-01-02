@@ -259,7 +259,15 @@ def _get_captured_payloads_with_type(intr, token) -> tuple:
 def _transform_kbaas_response(response: Optional[Dict[str, Any]]) -> Optional[list]:
     """Transform KBaaS response to standard retriever format.
 
-    Extracts results and converts 'text_content' to 'page_content'.
+    Extracts results and maps content fields to 'page_content'.
+    
+    For hierarchical KB (parent retrieval):
+      - Uses 'parent_chunk_text' as 'page_content' (the context users typically want)
+      - Preserves 'text_content' as 'embedded_content' for reference
+    
+    For standard KB:
+      - Uses 'text_content' as 'page_content'
+    
     Returns a list of dicts as expected for retriever spans.
     """
     if not isinstance(response, dict):
@@ -271,9 +279,19 @@ def _transform_kbaas_response(response: Optional[Dict[str, Any]]) -> Optional[li
 
     transformed_results = []
     for item in results:
-        if isinstance(item, dict) and "text_content" in item:
+        if isinstance(item, dict):
             new_item = dict(item)
-            new_item["page_content"] = new_item.pop("text_content")
+            
+            # For hierarchical KB: prefer parent_chunk_text as page_content
+            if "parent_chunk_text" in new_item:
+                new_item["page_content"] = new_item.pop("parent_chunk_text")
+                # Preserve embedded text as embedded_content for reference
+                if "text_content" in new_item:
+                    new_item["embedded_content"] = new_item.pop("text_content")
+            elif "text_content" in new_item:
+                # Standard KB: use text_content as page_content
+                new_item["page_content"] = new_item.pop("text_content")
+            
             transformed_results.append(new_item)
         else:
             transformed_results.append(item)

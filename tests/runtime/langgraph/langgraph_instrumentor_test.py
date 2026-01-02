@@ -311,6 +311,108 @@ def test_transform_kbaas_response_handles_missing_results_key():
     assert transformed == []
 
 
+def test_transform_kbaas_response_hierarchical_kb_with_parent_chunk():
+    """Test hierarchical KB: parent_chunk_text becomes page_content, text_content becomes embedded_content."""
+    response = {
+        "results": [
+            {
+                "metadata": {"source": "doc1.pdf", "page": 1},
+                "text_content": "This is the embedded chunk.",
+                "parent_chunk_text": "This is the full parent context with more information."
+            },
+            {
+                "metadata": {"source": "doc2.pdf", "page": 2},
+                "text_content": "Another embedded chunk.",
+                "parent_chunk_text": "Another parent context."
+            }
+        ],
+        "total_results": 2
+    }
+
+    transformed = _transform_kbaas_response(response)
+
+    # Should return a list
+    assert isinstance(transformed, list)
+    assert len(transformed) == 2
+
+    # parent_chunk_text should become page_content
+    assert transformed[0]["page_content"] == "This is the full parent context with more information."
+    assert transformed[1]["page_content"] == "Another parent context."
+
+    # text_content should become embedded_content
+    assert transformed[0]["embedded_content"] == "This is the embedded chunk."
+    assert transformed[1]["embedded_content"] == "Another embedded chunk."
+
+    # Original keys should be removed
+    assert "parent_chunk_text" not in transformed[0]
+    assert "parent_chunk_text" not in transformed[1]
+    assert "text_content" not in transformed[0]
+    assert "text_content" not in transformed[1]
+
+    # Metadata should be preserved
+    assert transformed[0]["metadata"]["source"] == "doc1.pdf"
+
+
+def test_transform_kbaas_response_hierarchical_kb_parent_only():
+    """Test hierarchical KB with parent_chunk_text but no text_content."""
+    response = {
+        "results": [
+            {
+                "metadata": {"source": "doc1.pdf"},
+                "parent_chunk_text": "Parent context only."
+            }
+        ],
+        "total_results": 1
+    }
+
+    transformed = _transform_kbaas_response(response)
+
+    assert isinstance(transformed, list)
+    assert len(transformed) == 1
+    assert transformed[0]["page_content"] == "Parent context only."
+    assert "embedded_content" not in transformed[0]
+    assert "parent_chunk_text" not in transformed[0]
+
+
+def test_transform_kbaas_response_mixed_results():
+    """Test mixed results: some with parent_chunk_text, some with only text_content."""
+    response = {
+        "results": [
+            {
+                "metadata": {"source": "hierarchical.pdf"},
+                "text_content": "Embedded chunk.",
+                "parent_chunk_text": "Full parent context."
+            },
+            {
+                "metadata": {"source": "standard.pdf"},
+                "text_content": "Standard KB chunk."
+            },
+            {
+                "metadata": {"source": "empty.pdf"}
+                # No content fields
+            }
+        ],
+        "total_results": 3
+    }
+
+    transformed = _transform_kbaas_response(response)
+
+    assert isinstance(transformed, list)
+    assert len(transformed) == 3
+
+    # First item: hierarchical (has parent_chunk_text)
+    assert transformed[0]["page_content"] == "Full parent context."
+    assert transformed[0]["embedded_content"] == "Embedded chunk."
+
+    # Second item: standard (only text_content)
+    assert transformed[1]["page_content"] == "Standard KB chunk."
+    assert "embedded_content" not in transformed[1]
+
+    # Third item: no content fields
+    assert "page_content" not in transformed[2]
+    assert "embedded_content" not in transformed[2]
+
+
 # -----------------------------
 # Retriever Call Detection Tests
 # -----------------------------
