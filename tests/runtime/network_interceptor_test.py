@@ -11,6 +11,10 @@ from gradient_adk.runtime.network_interceptor import (
     setup_digitalocean_interception,
     create_adk_user_agent_hook,
     RequestHook,
+    is_inference_url,
+    is_kbaas_url,
+    INFERENCE_URL_PATTERNS,
+    KBAAS_URL_PATTERNS,
 )
 
 
@@ -468,3 +472,135 @@ def test_setup_digitalocean_interception_registers_ua_hook():
 
     # Should completely replace with Gradient/adk/{version} format
     assert result["User-Agent"].startswith("Gradient/adk/")
+
+
+# ---- URL Classification Helper Tests ----
+
+
+def test_is_inference_url_prod():
+    """Test that is_inference_url correctly identifies production inference URLs."""
+    assert is_inference_url("https://inference.do-ai.run/v1/chat/completions") is True
+    assert is_inference_url("https://api.inference.do-ai.run/v1/chat") is True
+
+
+def test_is_inference_url_test():
+    """Test that is_inference_url correctly identifies test inference URLs."""
+    assert is_inference_url("https://inference.do-ai-test.run/v1/chat/completions") is True
+    assert is_inference_url("https://api.inference.do-ai-test.run/v1/chat") is True
+
+
+def test_is_inference_url_negative():
+    """Test that is_inference_url returns False for non-inference URLs."""
+    assert is_inference_url("https://example.com/api") is False
+    assert is_inference_url("https://kbaas.do-ai.run/retrieve") is False
+    assert is_inference_url("https://openai.com/v1/chat") is False
+    assert is_inference_url(None) is False
+    assert is_inference_url("") is False
+
+
+def test_is_kbaas_url_prod():
+    """Test that is_kbaas_url correctly identifies production KBaaS URLs."""
+    assert is_kbaas_url("https://kbaas.do-ai.run/retrieve") is True
+    assert is_kbaas_url("https://api.kbaas.do-ai.run/v1/retrieve") is True
+
+
+def test_is_kbaas_url_test():
+    """Test that is_kbaas_url correctly identifies test KBaaS URLs."""
+    assert is_kbaas_url("https://kbaas.do-ai-test.run/retrieve") is True
+    assert is_kbaas_url("https://api.kbaas.do-ai-test.run/v1/retrieve") is True
+
+
+def test_is_kbaas_url_negative():
+    """Test that is_kbaas_url returns False for non-KBaaS URLs."""
+    assert is_kbaas_url("https://example.com/api") is False
+    assert is_kbaas_url("https://inference.do-ai.run/v1/chat") is False
+    assert is_kbaas_url("https://openai.com/v1/embeddings") is False
+    assert is_kbaas_url(None) is False
+    assert is_kbaas_url("") is False
+
+
+def test_url_patterns_are_mutually_exclusive():
+    """Test that inference and KBaaS URL patterns don't overlap."""
+    # Inference URLs should not be identified as KBaaS
+    for pattern in INFERENCE_URL_PATTERNS:
+        test_url = f"https://{pattern}/v1/chat"
+        assert is_inference_url(test_url) is True
+        assert is_kbaas_url(test_url) is False
+
+    # KBaaS URLs should not be identified as inference
+    for pattern in KBAAS_URL_PATTERNS:
+        test_url = f"https://{pattern}/retrieve"
+        assert is_kbaas_url(test_url) is True
+        assert is_inference_url(test_url) is False
+
+
+# ---- KBaaS Endpoint Pattern Tests ----
+
+
+def test_setup_digitalocean_interception_includes_kbaas_patterns():
+    """Test that setup_digitalocean_interception includes KBaaS endpoint patterns."""
+    setup_digitalocean_interception()
+    intr = get_network_interceptor()
+
+    with intr._lock:
+        patterns = set(intr._tracked_endpoints)
+        active = intr._active
+
+    assert active
+
+    # Check inference patterns
+    assert "inference.do-ai.run" in patterns
+    assert "inference.do-ai-test.run" in patterns
+
+    # Check KBaaS patterns
+    assert "kbaas.do-ai.run" in patterns
+    assert "kbaas.do-ai-test.run" in patterns
+
+
+def test_kbaas_request_is_tracked():
+    """Test that KBaaS requests are tracked by the interceptor."""
+    setup_digitalocean_interception()
+    intr = get_network_interceptor()
+
+    token = intr.snapshot_token()
+
+    # Record a KBaaS request
+    intr._record_request("https://kbaas.do-ai.run/v1/retrieve", {"query": "test"})
+
+    assert intr.hits_since(token) == 1
+
+    # Check that URL is captured
+    captured = intr.get_captured_requests_since(token)
+    assert len(captured) == 1
+    assert captured[0].url == "https://kbaas.do-ai.run/v1/retrieve"
+    assert captured[0].request_payload == {"query": "test"}
+
+
+def test_kbaas_user_agent_hook_applied():
+    """Test that User-Agent hook is applied to KBaaS requests."""
+    setup_digitalocean_interception()
+    intr = get_network_interceptor()
+
+    headers = {"User-Agent": "TestClient/1.0"}
+    result = intr._apply_request_hooks("https://kbaas.do-ai.run/retrieve", headers)
+
+    # Should completely replace with Gradient/adk/{version} format
+    assert result["User-Agent"].startswith("Gradient/adk/")
+
+
+# ---- Captured Request URL Tests ----
+
+
+def test_captured_request_includes_url(intr):
+    """Test that CapturedRequest objects include the URL."""
+    intr.add_endpoint_pattern("test.example.com")
+
+    url = "https://test.example.com/api/endpoint"
+    payload = {"key": "value"}
+
+    intr._record_request(url, payload)
+
+    captured = intr.get_captured_requests_since(0)
+    assert len(captured) == 1
+    assert captured[0].url == url
+    assert captured[0].request_payload == payload

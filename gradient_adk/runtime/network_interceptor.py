@@ -24,9 +24,11 @@ class CapturedRequest:
 
     def __init__(
         self,
+        url: Optional[str] = None,
         request_payload: Optional[Dict[str, Any]] = None,
         response_payload: Optional[Dict[str, Any]] = None,
     ):
+        self.url = url
         self.request_payload = request_payload
         self.response_payload = response_payload
 
@@ -287,9 +289,9 @@ class NetworkInterceptor:
         with self._lock:
             if self._is_tracked_url(url):
                 self._hit_count += 1
-                # Create a new captured request record
+                # Create a new captured request record with URL
                 self._captured_requests.append(
-                    CapturedRequest(request_payload=request_payload)
+                    CapturedRequest(url=url, request_payload=request_payload)
                 )
 
     def _record_response(
@@ -401,6 +403,25 @@ def create_adk_user_agent_hook(version: str, url_patterns: List[str]) -> Request
     return hook
 
 
+# URL classification helpers for different DigitalOcean services
+INFERENCE_URL_PATTERNS = ["inference.do-ai.run", "inference.do-ai-test.run"]
+KBAAS_URL_PATTERNS = ["kbaas.do-ai.run", "kbaas.do-ai-test.run"]
+
+
+def is_inference_url(url: Optional[str]) -> bool:
+    """Check if URL matches DigitalOcean inference (LLM) endpoints."""
+    if not url:
+        return False
+    return any(pattern in url for pattern in INFERENCE_URL_PATTERNS)
+
+
+def is_kbaas_url(url: Optional[str]) -> bool:
+    """Check if URL matches DigitalOcean KBaaS (Knowledge Base) endpoints."""
+    if not url:
+        return False
+    return any(pattern in url for pattern in KBAAS_URL_PATTERNS)
+
+
 # Global instance
 _global_interceptor = NetworkInterceptor()
 
@@ -411,13 +432,20 @@ def get_network_interceptor() -> NetworkInterceptor:
 
 def setup_digitalocean_interception() -> None:
     intr = get_network_interceptor()
-    intr.add_endpoint_pattern("inference.do-ai.run")
-    intr.add_endpoint_pattern("inference.do-ai-test.run")
 
-    # Register User-Agent hook for ADK identification
+    # Add inference (LLM) endpoint patterns
+    for pattern in INFERENCE_URL_PATTERNS:
+        intr.add_endpoint_pattern(pattern)
+
+    # Add KBaaS (Knowledge Base) endpoint patterns
+    for pattern in KBAAS_URL_PATTERNS:
+        intr.add_endpoint_pattern(pattern)
+
+    # Register User-Agent hook for ADK identification (all DO endpoints)
+    all_patterns = INFERENCE_URL_PATTERNS + KBAAS_URL_PATTERNS
     ua_hook = create_adk_user_agent_hook(
         version=_get_adk_version(),
-        url_patterns=["inference.do-ai.run", "inference.do-ai-test.run"],
+        url_patterns=all_patterns,
     )
     intr.add_request_hook(ua_hook)
 
