@@ -41,7 +41,7 @@ from enum import Enum
 from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
 
 from .runtime.interfaces import NodeExecution
-from .runtime.langgraph.helpers import get_tracker
+from .runtime.helpers import get_tracker
 from .runtime.network_interceptor import get_network_interceptor
 
 F = TypeVar("F", bound=Callable[..., Any])

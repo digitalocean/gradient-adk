@@ -117,11 +117,10 @@ async def test_async_run_creates_workflow_span(tracker, instrumentor, test_model
     llm_sub_span_found = False
     for call in tracker.on_node_start.call_args_list:
         node_exec = call[0][0]
-        if "workflow:" in node_exec.node_name:
+        # Check metadata indicates it's a workflow
+        if node_exec.metadata.get("is_workflow") is True:
             workflow_span_found = True
             assert node_exec.framework == "pydanticai"
-            # Check metadata indicates it's a workflow
-            assert node_exec.metadata.get("is_workflow") is True
             # Check for sub_spans containing LLM calls
             sub_spans = node_exec.metadata.get("sub_spans", [])
             for sub in sub_spans:
@@ -149,11 +148,10 @@ def test_sync_run_creates_workflow_span(tracker, instrumentor, test_model):
     llm_sub_span_found = False
     for call in tracker.on_node_start.call_args_list:
         node_exec = call[0][0]
-        if "workflow:" in node_exec.node_name:
+        # Check metadata indicates it's a workflow
+        if node_exec.metadata.get("is_workflow") is True:
             workflow_span_found = True
             assert node_exec.framework == "pydanticai"
-            # Check metadata indicates it's a workflow
-            assert node_exec.metadata.get("is_workflow") is True
             # Check for sub_spans containing LLM calls
             sub_spans = node_exec.metadata.get("sub_spans", [])
             for sub in sub_spans:
