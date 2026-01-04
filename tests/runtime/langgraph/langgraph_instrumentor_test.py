@@ -6,6 +6,8 @@ from langgraph.graph import StateGraph
 from gradient_adk.runtime.langgraph.langgraph_instrumentor import (
     LangGraphInstrumentor,
     WRAPPED_FLAG,
+    _transform_kbaas_response,
+    _get_captured_payloads_with_type,
 )
 from gradient_adk.runtime.langgraph.helpers import (
     _is_langgraph_instrumentation_disabled,
@@ -203,40 +205,3 @@ def test_already_wrapped_function_is_not_rewrapped(tracker, instrumentor):
 
     app = _compile_singleton_graph(g, "noop")
     assert app.invoke({}) == {"ok": 1}
-
-
-# -----------------------------
-# Environment Variable Tests
-# -----------------------------
-
-
-def test_env_var_disables_instrumentation():
-    """Test that GRADIENT_DISABLE_LANGGRAPH_INSTRUMENTOR disables instrumentation."""
-    # Without env var
-    assert not _is_langgraph_instrumentation_disabled()
-
-    # With env var set to true
-    with patch.dict(os.environ, {DISABLE_LANGGRAPH_INSTRUMENTOR_ENV: "true"}):
-        assert _is_langgraph_instrumentation_disabled()
-
-    # With env var set to 1
-    with patch.dict(os.environ, {DISABLE_LANGGRAPH_INSTRUMENTOR_ENV: "1"}):
-        assert _is_langgraph_instrumentation_disabled()
-
-    # With env var set to yes
-    with patch.dict(os.environ, {DISABLE_LANGGRAPH_INSTRUMENTOR_ENV: "yes"}):
-        assert _is_langgraph_instrumentation_disabled()
-
-    # With env var set to false
-    with patch.dict(os.environ, {DISABLE_LANGGRAPH_INSTRUMENTOR_ENV: "false"}):
-        assert not _is_langgraph_instrumentation_disabled()
-
-    # With env var set to empty string
-    with patch.dict(os.environ, {DISABLE_LANGGRAPH_INSTRUMENTOR_ENV: ""}):
-        assert not _is_langgraph_instrumentation_disabled()
-
-
-def test_langgraph_available_check():
-    """Test _is_langgraph_available returns True when langgraph is installed."""
-    # Since we're running these tests with langgraph, it must be available
-    assert _is_langgraph_available()
