@@ -1,43 +1,67 @@
+"""
+LangGraph instrumentation helpers for Gradient ADK.
+
+This module provides backward-compatible functions that delegate to the
+centralized InstrumentorRegistry in gradient_adk.runtime.helpers.
+
+For new code, prefer using:
+    from gradient_adk.runtime.helpers import capture_all, get_tracker, registry
+"""
+
 from __future__ import annotations
-import os
 from typing import Optional
-from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigManager
-from gradient_adk.runtime.langgraph.langgraph_instrumentor import LangGraphInstrumentor
+
 from gradient_adk.runtime.digitalocean_tracker import DigitalOceanTracesTracker
-from gradient_adk.digital_ocean_api import AsyncDigitalOceanGenAI
-from gradient_adk.runtime.network_interceptor import setup_digitalocean_interception
 
-_TRACKER: Optional[DigitalOceanTracesTracker] = None
-_INSTALLED = False
-
-config_reader = YamlAgentConfigManager()
+# Environment variable to disable LangGraph instrumentation
+DISABLE_LANGGRAPH_INSTRUMENTOR_ENV = "GRADIENT_DISABLE_LANGGRAPH_INSTRUMENTOR"
 
 
-def capture_graph() -> None:
-    """Install DO tracing for LangGraph exactly once.
-    Must be called BEFORE graph.add_node/compile to capture spans.
-    """
-    global _TRACKER, _INSTALLED
-    if _INSTALLED and _TRACKER:
-        return _TRACKER
+def _is_langgraph_instrumentation_disabled() -> bool:
+    """Check if LangGraph instrumentation is disabled via environment variable."""
+    import os
+    val = os.environ.get(DISABLE_LANGGRAPH_INSTRUMENTOR_ENV, "").lower()
+    return val in ("true", "1", "yes")
 
+
+def _is_langgraph_available() -> bool:
+    """Check if langgraph is installed and available."""
     try:
-        api_token = os.environ["DIGITALOCEAN_API_TOKEN"]
-    except Exception as e:
-        # Only enable DO tracing if we have an API token
-        return
-    ws = config_reader.get_agent_name()
-    dep = config_reader.get_agent_environment()
+        from langgraph.graph import StateGraph
+        return True
+    except ImportError:
+        return False
 
-    _TRACKER = DigitalOceanTracesTracker(
-        client=AsyncDigitalOceanGenAI(api_token=api_token),
-        agent_workspace_name=ws,
-        agent_deployment_name=dep,
-    )
-    setup_digitalocean_interception()
-    LangGraphInstrumentor().install(_TRACKER)
-    _INSTALLED = True
+
+def capture_graph() -> Optional[DigitalOceanTracesTracker]:
+    """
+    Install DO tracing for LangGraph exactly once.
+    Must be called BEFORE graph compilation to capture spans.
+    
+    Can be disabled by setting GRADIENT_DISABLE_LANGGRAPH_INSTRUMENTOR=true
+    
+    Returns:
+        The tracker instance if instrumentation was installed, None otherwise.
+    
+    Note: This function now delegates to the centralized registry.
+    For new code, prefer using capture_all() from gradient_adk.runtime.helpers.
+    """
+    from gradient_adk.runtime.helpers import registry, _register_langgraph
+
+    # Ensure langgraph is registered
+    if "langgraph" not in registry._registrations:
+        _register_langgraph()
+
+    # Install and return tracker
+    return registry.install("langgraph")
 
 
 def get_tracker() -> Optional[DigitalOceanTracesTracker]:
-    return _TRACKER
+    """
+    Get the LangGraph tracker instance if available.
+    
+    Note: This function now returns the shared tracker from the registry.
+    For new code, prefer using get_tracker() from gradient_adk.runtime.helpers.
+    """
+    from gradient_adk.runtime.helpers import registry
+    return registry.get_tracker()

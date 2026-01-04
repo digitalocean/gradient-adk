@@ -12,6 +12,11 @@ from gradient_adk.digital_ocean_api import (
     Trace,
     Span,
     TraceSpanType,
+    SpanCommon,
+    LLMSpanDetails,
+    ToolSpanDetails,
+    RetrieverSpanDetails,
+    WorkflowSpanDetails,
 )
 from .interfaces import NodeExecution
 
@@ -324,22 +329,118 @@ class DigitalOceanTracesTracker:
             out = dict(out)
             out["_llm_endpoints"] = list(ex.metadata["llm_endpoints"])
 
-        # classify LLM/tool/retriever via metadata set by the instrumentor
+        # classify span type via metadata set by the instrumentor
         metadata = ex.metadata or {}
-        if metadata.get("is_llm_call"):
+        
+        # Check if this is a workflow span (from PydanticAI Agent.run)
+        if metadata.get("is_workflow"):
+            span_type = TraceSpanType.TRACE_SPAN_TYPE_WORKFLOW
+            
+            # Build sub-spans from the workflow's collected spans
+            sub_spans_list = metadata.get("sub_spans", [])
+            sub_spans = [self._to_span(sub) for sub in sub_spans_list]
+            
+            # Calculate duration from start to end
+            duration_ns = None
+            if ex.start_time and ex.end_time:
+                duration_ns = int((ex.end_time - ex.start_time).total_seconds() * 1_000_000_000)
+            
+            # Build common fields
+            common = SpanCommon(
+                duration_ns=duration_ns,
+                metadata={"agent_name": metadata.get("agent_name")},
+                status_code=200 if ex.error is None else 500,
+            )
+            
+            # Build workflow details with nested sub-spans
+            workflow_details = WorkflowSpanDetails(spans=sub_spans)
+            
+            return Span(
+                created_at=_utc(ex.start_time),
+                name=ex.node_name,
+                input=inp,
+                output=out,
+                type=span_type,
+                common=common,
+                workflow=workflow_details,
+            )
+        elif metadata.get("is_llm_call"):
             span_type = TraceSpanType.TRACE_SPAN_TYPE_LLM
+            
+            # Calculate duration
+            duration_ns = None
+            if ex.start_time and ex.end_time:
+                duration_ns = int((ex.end_time - ex.start_time).total_seconds() * 1_000_000_000)
+            
+            # Build LLM-specific details
+            llm_common = SpanCommon(
+                duration_ns=duration_ns,
+                status_code=200 if ex.error is None else 500,
+            )
+            
+            # Extract LLM-specific fields from output if available
+            llm_details = LLMSpanDetails(
+                common=llm_common,
+                model=metadata.get("model_name") or ex.node_name.replace("llm:", ""),
+            )
+            
+            return Span(
+                created_at=_utc(ex.start_time),
+                name=ex.node_name,
+                input=inp,
+                output=out,
+                type=span_type,
+                llm=llm_details,
+            )
         elif metadata.get("is_retriever_call"):
             span_type = TraceSpanType.TRACE_SPAN_TYPE_RETRIEVER
+            
+            # Calculate duration
+            duration_ns = None
+            if ex.start_time and ex.end_time:
+                duration_ns = int((ex.end_time - ex.start_time).total_seconds() * 1_000_000_000)
+            
+            # Build retriever-specific details
+            retriever_common = SpanCommon(
+                duration_ns=duration_ns,
+                status_code=200 if ex.error is None else 500,
+            )
+            
+            retriever_details = RetrieverSpanDetails(common=retriever_common)
+            
+            return Span(
+                created_at=_utc(ex.start_time),
+                name=ex.node_name,
+                input=inp,
+                output=out,
+                type=span_type,
+                retriever=retriever_details,
+            )
         else:
+            # Default to tool span
             span_type = TraceSpanType.TRACE_SPAN_TYPE_TOOL
-
-        return Span(
-            created_at=_utc(ex.start_time),
-            name=ex.node_name,
-            input=inp,
-            output=out,
-            type=span_type,
-        )
+            
+            # Calculate duration
+            duration_ns = None
+            if ex.start_time and ex.end_time:
+                duration_ns = int((ex.end_time - ex.start_time).total_seconds() * 1_000_000_000)
+            
+            # Build tool-specific details
+            tool_common = SpanCommon(
+                duration_ns=duration_ns,
+                status_code=200 if ex.error is None else 500,
+            )
+            
+            tool_details = ToolSpanDetails(common=tool_common)
+            
+            return Span(
+                created_at=_utc(ex.start_time),
+                name=ex.node_name,
+                input=inp,
+                output=out,
+                type=span_type,
+                tool=tool_details,
+            )
 
     def _coerce_top(self, val: Any, kind: str) -> Dict[str, Any]:
         """

@@ -12,13 +12,68 @@ class TraceSpanType(str, Enum):
     TRACE_SPAN_TYPE_LLM = "TRACE_SPAN_TYPE_LLM"
     TRACE_SPAN_TYPE_RETRIEVER = "TRACE_SPAN_TYPE_RETRIEVER"
     TRACE_SPAN_TYPE_TOOL = "TRACE_SPAN_TYPE_TOOL"
+    TRACE_SPAN_TYPE_WORKFLOW = "TRACE_SPAN_TYPE_WORKFLOW"
+    TRACE_SPAN_TYPE_AGENT = "TRACE_SPAN_TYPE_AGENT"
+
+
+class SpanCommon(BaseModel):
+    """Common fields for all span types."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    duration_ns: Optional[int] = Field(None, description="Duration in nanoseconds")
+    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional metadata")
+    tags: Optional[List[str]] = Field(None, description="Tags for the span")
+    status_code: Optional[int] = Field(None, description="HTTP status code if applicable")
+
+
+class LLMSpanDetails(BaseModel):
+    """LLM-specific span details."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    common: Optional[SpanCommon] = None
+    model: Optional[str] = Field(None, description="Model name")
+    num_input_tokens: Optional[int] = Field(None, description="Number of input tokens")
+    num_output_tokens: Optional[int] = Field(None, description="Number of output tokens")
+    total_tokens: Optional[int] = Field(None, description="Total tokens")
+    temperature: Optional[float] = Field(None, description="Temperature setting")
+    time_to_first_token_ns: Optional[int] = Field(
+        None, description="Time to first token in nanoseconds"
+    )
+
+
+class ToolSpanDetails(BaseModel):
+    """Tool-specific span details."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    common: Optional[SpanCommon] = None
+    tool_call_id: Optional[str] = Field(None, description="Tool call identifier")
+
+
+class RetrieverSpanDetails(BaseModel):
+    """Retriever-specific span details."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    common: Optional[SpanCommon] = None
+
+
+class WorkflowSpanDetails(BaseModel):
+    """Workflow span containing nested sub-spans."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    spans: List["Span"] = Field(default_factory=list, description="Nested sub-spans")
 
 
 class Span(BaseModel):
     """
-    Represents a span within a trace (e.g., LLM call, retriever, tool).
+    Represents a span within a trace (e.g., LLM call, retriever, tool, workflow).
     - created_at: RFC3339 timestamp (protobuf Timestamp)
     - input/output: json
+    - For workflow spans, contains nested sub-spans in the 'workflow' field
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
@@ -28,6 +83,23 @@ class Span(BaseModel):
     name: str
     output: Dict[str, Any]
     type: TraceSpanType = Field(default=TraceSpanType.TRACE_SPAN_TYPE_UNKNOWN)
+
+    # Common fields for all span types
+    common: Optional[SpanCommon] = Field(None, description="Common span metadata")
+
+    # Type-specific fields
+    llm: Optional[LLMSpanDetails] = Field(None, description="LLM-specific details")
+    tool: Optional[ToolSpanDetails] = Field(None, description="Tool-specific details")
+    retriever: Optional[RetrieverSpanDetails] = Field(
+        None, description="Retriever-specific details"
+    )
+    workflow: Optional[WorkflowSpanDetails] = Field(
+        None, description="Workflow span with nested sub-spans"
+    )
+
+
+# Update forward reference for WorkflowSpanDetails
+WorkflowSpanDetails.model_rebuild()
 
 
 class Trace(BaseModel):
