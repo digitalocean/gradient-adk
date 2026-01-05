@@ -56,16 +56,57 @@ jobs:
         run: |
           twine upload --repository testpypi dist/*
       
-      - name: Run integration tests
+      - name: Wait for TestPyPI availability
         run: |
-          echo "🧪 Integration tests placeholder"
-          echo "TODO: Add integration tests here to validate the TestPyPI package"
-          echo "Examples:"
-          echo "  - Install from TestPyPI: pip install --index-url https://test.pypi.org/simple/ gradient-adk==${{ steps.get_version.outputs.version }}"
-          echo "  - Run smoke tests against the installed package"
-          echo "  - Validate CLI commands work"
-          echo ""
-          echo "✅ Integration tests passed (placeholder)"
+          VERSION="${{ steps.get_version.outputs.version }}"
+          echo "Waiting for gradient-adk==$VERSION to be available on TestPyPI..."
+          for i in {1..30}; do
+            if pip install --dry-run --index-url https://test.pypi.org/simple/ \
+                          --extra-index-url https://pypi.org/simple/ \
+                          gradient-adk==$VERSION 2>&1 | grep -q "Would install"; then
+              echo "✅ Package is available on TestPyPI"
+              exit 0
+            fi
+            echo "Attempt $i/30: Package not yet available, waiting 10s..."
+            sleep 10
+          done
+          echo "❌ Package not available after 5 minutes"
+          exit 1
+
+      - name: Run integration tests on TestPyPI package
+        env:
+          DIGITALOCEAN_API_TOKEN: ${{ secrets.TEST_DIGITALOCEAN_API_TOKEN }}
+          TEST_DIGITALOCEAN_API_TOKEN: ${{ secrets.TEST_DIGITALOCEAN_API_TOKEN }}
+          TEST_AGENT_WORKSPACE_NAME: ${{ secrets.TEST_AGENT_WORKSPACE_NAME }}
+          TEST_AGENT_DEPLOYMENT_NAME: ${{ secrets.TEST_AGENT_DEPLOYMENT_NAME }}
+          GRADIENT_MODEL_ACCESS_KEY: ${{ secrets.GRADIENT_MODEL_ACCESS_KEY }}
+        run: |
+          VERSION="${{ steps.get_version.outputs.version }}"
+          
+          # Create a fresh virtual environment for testing
+          python -m venv test_env
+          source test_env/bin/activate
+          
+          # Install the package from TestPyPI with regular PyPI as fallback for dependencies
+          pip install --index-url https://test.pypi.org/simple/ \
+                      --extra-index-url https://pypi.org/simple/ \
+                      gradient-adk==$VERSION
+          
+          # Verify the installed version
+          pip show gradient-adk
+          
+          # Install test dependencies
+          pip install pytest pytest-cov pyyaml requests
+          
+          # Run CLI integration tests
+          echo "🧪 Running CLI integration tests..."
+          pytest integration_tests/ -m "cli and not e2e" -v --maxfail=1
+          
+          # Run E2E tests
+          echo "🧪 Running E2E tests..."
+          pytest integration_tests/ -m e2e -v --maxfail=1
+          
+          echo "✅ All integration tests passed on TestPyPI package"
       
       - name: Publish to PyPI
         env:
