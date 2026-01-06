@@ -388,3 +388,81 @@ def main(query, context):
 
         finally:
             cleanup_process(process)
+
+    @pytest.mark.cli
+    def test_agent_run_session_id_header_passthrough(self, setup_agent_in_temp):
+        """
+        Test that the Session-Id header is passed to the agent context.
+        Verifies:
+        - Session-Id header is extracted from request
+        - Session-Id is available in RequestContext
+        - Agent can return session_id in response
+        """
+        logger = logging.getLogger(__name__)
+        temp_dir = setup_agent_in_temp
+        port = find_free_port()
+        process = None
+
+        try:
+            logger.info(f"Starting agent on port {port} in {temp_dir}")
+
+            # Start the agent server
+            process = subprocess.Popen(
+                [
+                    "gradient",
+                    "agent",
+                    "run",
+                    "--port",
+                    str(port),
+                    "--no-dev",
+                ],
+                cwd=temp_dir,
+                start_new_session=True,
+            )
+
+            # Wait for server to be ready
+            server_ready = wait_for_server(port, timeout=30)
+            assert server_ready, "Server did not start within timeout"
+
+            # Test with Session-Id header
+            test_session_id = "test-session-12345"
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello"},
+                headers={"Session-Id": test_session_id},
+                timeout=10,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["session_id"] == test_session_id, \
+                f"Expected session_id '{test_session_id}', got '{data.get('session_id')}'"
+            logger.info(f"Session-Id header passthrough test passed: {data}")
+
+            # Test without Session-Id header (should be None)
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello without session"},
+                timeout=10,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["session_id"] is None, \
+                f"Expected session_id to be None, got '{data.get('session_id')}'"
+            logger.info("No Session-Id header test passed (session_id is None)")
+
+            # Test with lowercase session-id header (case-insensitive)
+            lowercase_session_id = "lowercase-session-abc"
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello with lowercase header"},
+                headers={"session-id": lowercase_session_id},
+                timeout=10,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert data["session_id"] == lowercase_session_id, \
+                f"Expected session_id '{lowercase_session_id}', got '{data.get('session_id')}'"
+            logger.info("Lowercase session-id header test passed")
+
+        finally:
+            cleanup_process(process)

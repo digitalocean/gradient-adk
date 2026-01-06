@@ -315,6 +315,60 @@ class TestEvaluationMode:
         assert mock_client.create_traces.called
 
 
+class TestSessionId:
+    """Test session_id handling in traces."""
+
+    @pytest.mark.asyncio
+    async def test_session_id_passed_to_create_traces(self, tracker, mock_client):
+        """Test that session_id is passed to CreateTracesInput."""
+        tracker.on_request_start(
+            "agent", {"input": "test"}, is_evaluation=False, session_id="sess-abc-123"
+        )
+        tracker.on_request_end(outputs={"result": "ok"}, error=None)
+        await tracker.aclose()
+
+        assert mock_client.create_traces.called
+        call_args = mock_client.create_traces.call_args[0][0]
+        assert isinstance(call_args, CreateTracesInput)
+        assert call_args.session_id == "sess-abc-123"
+
+    @pytest.mark.asyncio
+    async def test_session_id_none_when_not_provided(self, tracker, mock_client):
+        """Test that session_id is None when not provided."""
+        tracker.on_request_start("agent", {"input": "test"}, is_evaluation=False)
+        tracker.on_request_end(outputs={"result": "ok"}, error=None)
+        await tracker.aclose()
+
+        assert mock_client.create_traces.called
+        call_args = mock_client.create_traces.call_args[0][0]
+        assert call_args.session_id is None
+
+    @pytest.mark.asyncio
+    async def test_session_id_preserved_across_request(self, tracker, mock_client):
+        """Test that session_id is preserved throughout the request lifecycle."""
+        tracker.on_request_start(
+            "agent", {"input": "test"}, is_evaluation=True, session_id="eval-session"
+        )
+
+        node = NodeExecution(
+            node_id="node-1",
+            node_name="process",
+            framework="langgraph",
+            start_time=datetime.now(timezone.utc),
+            inputs={"test": "data"},
+        )
+        tracker.on_node_start(node)
+        tracker.on_node_end(node, {"result": "done"})
+        tracker.on_request_end(outputs={"final": "result"}, error=None)
+
+        # Use submit_and_get_trace_id for evaluation mode
+        await tracker.submit_and_get_trace_id()
+
+        assert mock_client.create_traces.called
+        call_args = mock_client.create_traces.call_args[0][0]
+        assert call_args.session_id == "eval-session"
+
+
 class TestTopLevelIO:
     """Test top-level input/output normalization."""
 
