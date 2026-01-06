@@ -88,9 +88,13 @@ jobs:
           
           # Install the package from TestPyPI with regular PyPI as PRIMARY for dependencies
           # This ensures dependencies like fastapi come from real PyPI, not broken TestPyPI versions
-          pip install --index-url https://pypi.org/simple/ \
-                      --extra-index-url https://test.pypi.org/simple/ \
-                      gradient-adk==$VERSION
+          for i in {1..5}; do
+            pip install --no-cache-dir \
+              --index-url https://pypi.org/simple/ \
+              --extra-index-url https://test.pypi.org/simple/ \
+              gradient-adk==$VERSION && break
+            sleep 2
+          done
           
           # Verify the installed version
           pip show gradient-adk
