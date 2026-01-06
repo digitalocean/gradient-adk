@@ -17,8 +17,7 @@ class RequestContext:
     """Context passed to entrypoint functions containing request metadata.
 
     Attributes:
-        session_id: The session ID from the request headers, if provided.
-            Extracted from the 'Session-Id' header (case-insensitive).
+        session_id: The session ID for the request, if provided.
     """
 
     session_id: Optional[str] = None
