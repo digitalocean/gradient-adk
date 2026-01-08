@@ -382,10 +382,56 @@ class DigitalOceanTracesTracker:
                 status_code=200 if ex.error is None else 500,
             )
 
-            # Extract LLM-specific fields from output if available
+            # Extract LLM-specific fields from captured API payloads
+            llm_request = metadata.get("llm_request_payload", {}) or {}
+            llm_response = metadata.get("llm_response_payload", {}) or {}
+
+            # For LLM spans, use just the messages as input (not the full request payload)
+            # Must be a dict (not array) because protobuf Struct requires key-value pairs
+            if isinstance(llm_request, dict) and "messages" in llm_request:
+                inp = {"messages": llm_request.get("messages")}
+
+            # For LLM spans, use just the choices as output (not the full response payload)
+            # Must be a dict (not array) because protobuf Struct requires key-value pairs
+            if isinstance(llm_response, dict) and "choices" in llm_response:
+                out = {"choices": llm_response.get("choices")}
+
+            # Extract model from request payload, fallback to metadata or node name
+            model = (
+                llm_request.get("model")
+                or metadata.get("model_name")
+                or ex.node_name.replace("llm:", "")
+            )
+
+            # Extract tools from request payload
+            tools = llm_request.get("tools") if isinstance(llm_request, dict) else None
+
+            # Extract temperature from request payload
+            temperature = llm_request.get("temperature") if isinstance(llm_request, dict) else None
+
+            # Extract token counts from response payload
+            num_input_tokens = None
+            num_output_tokens = None
+            total_tokens = None
+            if isinstance(llm_response, dict):
+                usage = llm_response.get("usage", {})
+                if isinstance(usage, dict):
+                    num_input_tokens = usage.get("prompt_tokens")
+                    num_output_tokens = usage.get("completion_tokens")
+                    total_tokens = usage.get("total_tokens")
+
+            # Get time-to-first-token for streaming calls
+            time_to_first_token_ns = metadata.get("time_to_first_token_ns")
+
             llm_details = LLMSpanDetails(
                 common=llm_common,
-                model=metadata.get("model_name") or ex.node_name.replace("llm:", ""),
+                model=model,
+                tools=tools,
+                temperature=temperature,
+                num_input_tokens=num_input_tokens,
+                num_output_tokens=num_output_tokens,
+                total_tokens=total_tokens,
+                time_to_first_token_ns=time_to_first_token_ns,
             )
 
             return Span(

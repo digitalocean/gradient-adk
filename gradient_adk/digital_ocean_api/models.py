@@ -34,6 +34,9 @@ class LLMSpanDetails(BaseModel):
 
     common: Optional[SpanCommon] = None
     model: Optional[str] = Field(None, description="Model name")
+    tools: Optional[List[Dict[str, Any]]] = Field(
+        None, description="Tool definitions passed to the model"
+    )
     num_input_tokens: Optional[int] = Field(None, description="Number of input tokens")
     num_output_tokens: Optional[int] = Field(None, description="Number of output tokens")
     total_tokens: Optional[int] = Field(None, description="Total tokens")
@@ -72,7 +75,7 @@ class Span(BaseModel):
     """
     Represents a span within a trace (e.g., LLM call, retriever, tool, workflow).
     - created_at: RFC3339 timestamp (protobuf Timestamp)
-    - input/output: json
+    - input/output: json (must be dict for protobuf Struct compatibility)
     - For workflow spans, contains nested sub-spans in the 'workflow' field
     """
 

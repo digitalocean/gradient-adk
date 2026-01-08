@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 import uuid
 from contextvars import ContextVar
 from contextlib import asynccontextmanager
@@ -310,6 +311,7 @@ class PydanticAIInstrumentor:
             ret: Any,
             intr,
             tok,
+            time_to_first_token_ns: Optional[int] = None,
         ):
             """Finish a sub-span successfully."""
             # Check if this node made any tracked API calls
@@ -321,10 +323,22 @@ class PydanticAIInstrumentor:
                 meta = _ensure_meta(rec)
                 if is_llm:
                     meta["is_llm_call"] = True
+                    # Store raw API payloads for LLM field extraction in tracker
+                    if api_request:
+                        meta["llm_request_payload"] = api_request
+                    if api_response:
+                        meta["llm_response_payload"] = api_response
+                    # Store time-to-first-token if this was a streaming call
+                    if time_to_first_token_ns is not None:
+                        meta["time_to_first_token_ns"] = time_to_first_token_ns
                 elif is_retriever:
                     meta["is_retriever_call"] = True
                 else:
                     meta["is_llm_call"] = True
+                    if api_request:
+                        meta["llm_request_payload"] = api_request
+                    if api_response:
+                        meta["llm_response_payload"] = api_response
 
                 if api_request or api_response:
                     if api_request:
@@ -356,17 +370,24 @@ class PydanticAIInstrumentor:
         def _finish_sub_span_err(rec: NodeExecution, intr, tok, e: BaseException):
             """Finish a sub-span with an error."""
             if _had_hits_since(intr, tok):
-                api_request, _, is_llm, is_retriever = _get_captured_payloads_with_type(
+                api_request, api_response, is_llm, is_retriever = _get_captured_payloads_with_type(
                     intr, tok
                 )
 
                 meta = _ensure_meta(rec)
                 if is_llm:
                     meta["is_llm_call"] = True
+                    # Store raw API payloads for LLM field extraction in tracker
+                    if api_request:
+                        meta["llm_request_payload"] = api_request
+                    if api_response:
+                        meta["llm_response_payload"] = api_response
                 elif is_retriever:
                     meta["is_retriever_call"] = True
                 else:
                     meta["is_llm_call"] = True
+                    if api_request:
+                        meta["llm_request_payload"] = api_request
 
                 if api_request:
                     rec.inputs = _freeze(api_request)
@@ -598,7 +619,13 @@ class PydanticAIInstrumentor:
 
                 # Finish workflow node
                 workflow_node.end_time = _utc()
-                workflow_node.outputs = _freeze(result)
+                # Extract just the output from the result, not the full state
+                if hasattr(result, "output"):
+                    workflow_node.outputs = {"output": _freeze(result.output)}
+                elif hasattr(result, "data"):
+                    workflow_node.outputs = {"output": _freeze(result.data)}
+                else:
+                    workflow_node.outputs = _freeze(result)
 
                 # Store sub-spans in metadata for the tracker to handle
                 meta["sub_spans"] = workflow_ctx.sub_spans
@@ -651,7 +678,13 @@ class PydanticAIInstrumentor:
 
                 # Finish workflow node
                 workflow_node.end_time = _utc()
-                workflow_node.outputs = _freeze(result)
+                # Extract just the output from the result, not the full state
+                if hasattr(result, "output"):
+                    workflow_node.outputs = {"output": _freeze(result.output)}
+                elif hasattr(result, "data"):
+                    workflow_node.outputs = {"output": _freeze(result.data)}
+                else:
+                    workflow_node.outputs = _freeze(result)
 
                 # Store sub-spans in metadata for the tracker to handle
                 meta["sub_spans"] = workflow_ctx.sub_spans
@@ -706,7 +739,13 @@ class PydanticAIInstrumentor:
                 # Finish workflow node - get the result from the stream
                 try:
                     result = stream.result
-                    workflow_node.outputs = _freeze(result)
+                    # Extract just the output from the result, not the full state
+                    if hasattr(result, "output"):
+                        workflow_node.outputs = {"output": _freeze(result.output)}
+                    elif hasattr(result, "data"):
+                        workflow_node.outputs = {"output": _freeze(result.data)}
+                    else:
+                        workflow_node.outputs = _freeze(result)
                 except Exception:
                     workflow_node.outputs = {"streaming": True}
 
