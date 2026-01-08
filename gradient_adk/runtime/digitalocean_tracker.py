@@ -375,17 +375,21 @@ class DigitalOceanTracesTracker:
         elif metadata.get("is_llm_call"):
             span_type = TraceSpanType.TRACE_SPAN_TYPE_LLM
 
-            # Calculate duration
-            duration_ns = None
-            if ex.start_time and ex.end_time:
-                duration_ns = int(
-                    (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
-                )
+            # For programmatic API, only use user-provided duration_ns
+            # For decorators/automatic instrumentation, auto-calculate from start/end times
+            duration_ns = metadata.get("duration_ns")
+            if duration_ns is None and not metadata.get("is_programmatic"):
+                if ex.start_time and ex.end_time:
+                    duration_ns = int(
+                        (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
+                    )
 
             # Build LLM-specific details
             llm_common = SpanCommon(
                 duration_ns=duration_ns,
-                status_code=200 if ex.error is None else 500,
+                metadata=metadata.get("custom_metadata"),
+                tags=metadata.get("tags"),
+                status_code=metadata.get("status_code", 200 if ex.error is None else 500),
             )
 
             # Extract LLM-specific fields from captured API payloads
@@ -477,12 +481,14 @@ class DigitalOceanTracesTracker:
         elif metadata.get("is_agent_call"):
             span_type = TraceSpanType.TRACE_SPAN_TYPE_AGENT
 
-            # Calculate duration - use provided duration_ns if available
+            # For programmatic API, only use user-provided duration_ns
+            # For decorators/automatic instrumentation, auto-calculate from start/end times
             duration_ns = metadata.get("duration_ns")
-            if duration_ns is None and ex.start_time and ex.end_time:
-                duration_ns = int(
-                    (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
-                )
+            if duration_ns is None and not metadata.get("is_programmatic"):
+                if ex.start_time and ex.end_time:
+                    duration_ns = int(
+                        (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
+                    )
 
             # Build agent-specific details
             agent_common = SpanCommon(
@@ -503,12 +509,14 @@ class DigitalOceanTracesTracker:
         elif metadata.get("is_tool_call"):
             span_type = TraceSpanType.TRACE_SPAN_TYPE_TOOL
 
-            # Calculate duration - use provided duration_ns if available
+            # For programmatic API, only use user-provided duration_ns
+            # For decorators/automatic instrumentation, auto-calculate from start/end times
             duration_ns = metadata.get("duration_ns")
-            if duration_ns is None and ex.start_time and ex.end_time:
-                duration_ns = int(
-                    (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
-                )
+            if duration_ns is None and not metadata.get("is_programmatic"):
+                if ex.start_time and ex.end_time:
+                    duration_ns = int(
+                        (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
+                    )
 
             # Build tool-specific details
             tool_common = SpanCommon(

@@ -536,6 +536,7 @@ def add_llm_span(
     span = _create_span(name, _freeze(input))
     meta = _ensure_meta(span)
     meta["is_llm_call"] = True
+    meta["is_programmatic"] = True  # Mark as programmatic to skip auto-duration calculation
 
     if model is not None:
         meta["model_name"] = model
@@ -607,6 +608,7 @@ def add_tool_span(
     span = _create_span(name, _freeze(input))
     meta = _ensure_meta(span)
     meta["is_tool_call"] = True
+    meta["is_programmatic"] = True  # Mark as programmatic to skip auto-duration calculation
 
     if tool_call_id is not None:
         meta["tool_call_id"] = tool_call_id
@@ -660,6 +662,7 @@ def add_agent_span(
     span = _create_span(name, _freeze(input))
     meta = _ensure_meta(span)
     meta["is_agent_call"] = True
+    meta["is_programmatic"] = True  # Mark as programmatic to skip auto-duration calculation
 
     if tags is not None:
         meta["tags"] = tags
