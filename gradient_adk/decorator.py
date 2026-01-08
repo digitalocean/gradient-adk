@@ -31,9 +31,12 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-from gradient_adk.runtime.langgraph.helpers import capture_graph, get_tracker
+# Initialize framework instrumentation using the centralized registry
+# This is idempotent and will only install instrumentation once
+# Each instrumentor checks for its own environment variable to allow disabling
+from gradient_adk.runtime.helpers import capture_all, get_tracker
 
-capture_graph()
+capture_all()
 
 
 class _StreamingIteratorWithTracking:
@@ -188,7 +191,49 @@ def entrypoint(func: Callable) -> Callable:
                 logger.error("Error creating generator", error=str(e), exc_info=True)
                 raise HTTPException(status_code=500, detail="Internal server error")
 
-            # Wrap in tracking iterator
+            # If evaluation mode, collect all chunks and return as single response with trace ID
+            if is_evaluation:
+                from fastapi.responses import JSONResponse
+
+                collected_chunks: List[str] = []
+                try:
+                    async for chunk in user_gen:
+                        if isinstance(chunk, bytes):
+                            chunk_str = chunk.decode("utf-8", errors="replace")
+                        elif isinstance(chunk, dict):
+                            chunk_str = json.dumps(chunk)
+                        elif chunk is None:
+                            continue
+                        else:
+                            chunk_str = str(chunk)
+                        collected_chunks.append(chunk_str)
+
+                    result = "".join(collected_chunks)
+
+                    # Submit tracking and get trace ID
+                    trace_id = None
+                    if tr:
+                        try:
+                            tr._req["outputs"] = result
+                            trace_id = await tr.submit_and_get_trace_id()
+                        except Exception:
+                            pass
+
+                    headers = {"X-Gradient-Trace-Id": trace_id} if trace_id else {}
+                    return JSONResponse(content=result, headers=headers)
+
+                except Exception as e:
+                    if tr:
+                        try:
+                            tr._req["outputs"] = "".join(collected_chunks)
+                            tr._req["error"] = str(e)
+                            await tr._submit()
+                        except Exception:
+                            pass
+                    logger.error("Error in streaming evaluation", error=str(e), exc_info=True)
+                    raise HTTPException(status_code=500, detail="Internal server error")
+
+            # Normal streaming case - wrap in tracking iterator
             streaming_iter = _StreamingIteratorWithTracking(user_gen, tr, func.__name__)
 
             return FastAPIStreamingResponse(

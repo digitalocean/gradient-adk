@@ -1,5 +1,10 @@
 from .models import (
     TraceSpanType,
+    SpanCommon,
+    LLMSpanDetails,
+    ToolSpanDetails,
+    RetrieverSpanDetails,
+    WorkflowSpanDetails,
     Span,
     Trace,
     CreateTracesInput,
@@ -38,6 +43,11 @@ from .client_async import AsyncDigitalOceanGenAI
 
 __all__ = [
     "TraceSpanType",
+    "SpanCommon",
+    "LLMSpanDetails",
+    "ToolSpanDetails",
+    "RetrieverSpanDetails",
+    "WorkflowSpanDetails",
     "Span",
     "Trace",
     "CreateTracesInput",

@@ -32,6 +32,7 @@ class TrackerDouble:
         self.closed = False
         self._req = {}
         self._session_id = None
+        self._submitted_trace_id = None
 
     def on_request_start(self, name, inputs, is_evaluation=False, session_id=None):
         self.started.append((name, inputs, is_evaluation, session_id))
@@ -46,6 +47,12 @@ class TrackerDouble:
     async def _submit(self):
         """Simulate async submission."""
         await asyncio.sleep(0)
+
+    async def submit_and_get_trace_id(self):
+        """Simulate async submission and return trace ID."""
+        await asyncio.sleep(0)
+        self._submitted_trace_id = "test-trace-id-12345"
+        return self._submitted_trace_id
 
     async def aclose(self):
         """Simulate async close."""
@@ -373,6 +380,104 @@ def test_evaluation_mode_tracking(patch_helpers):
     # Check that is_evaluation was passed correctly
     assert tracker.started
     assert tracker.started[-1][2] is True  # is_evaluation flag
+
+
+def test_streaming_with_evaluation_id_collects_and_returns_complete_response(
+    patch_helpers,
+):
+    """Test that streaming with evaluation-id collects all chunks and returns complete response."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield "hello"
+        yield " "
+        yield "world"
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        # With evaluation-id header, response should NOT be streamed
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 200
+        # Response should be the complete collected output
+        assert r.json() == "hello world"
+        # Trace ID should be in response headers
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-12345"
+
+    # Check that is_evaluation was passed correctly
+    assert tracker.started
+    assert tracker.started[-1][2] is True  # is_evaluation flag
+    # Tracker should have the collected output
+    assert tracker._req.get("outputs") == "hello world"
+    # submit_and_get_trace_id should have been called
+    assert tracker._submitted_trace_id == "test-trace-id-12345"
+
+
+def test_streaming_without_evaluation_id_streams_normally(patch_helpers):
+    """Test that streaming without evaluation-id continues to stream normally."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield "hello"
+        yield " "
+        yield "world"
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        # Without evaluation-id header, response should be streamed
+        with client.stream("POST", "/run", json={"test": 1}) as resp:
+            assert resp.status_code == 200
+            # Read the full stream by iterating
+            body = "".join(chunk for chunk in resp.iter_text())
+            assert body == "hello world"
+
+    # Check that is_evaluation was passed as False
+    assert tracker.started
+    assert tracker.started[-1][2] is False  # is_evaluation flag
+    # submit_and_get_trace_id should NOT have been called (normal streaming)
+    assert tracker._submitted_trace_id is None
+
+
+def test_streaming_with_evaluation_id_handles_dict_chunks(patch_helpers):
+    """Test that streaming with evaluation-id properly handles dict chunks."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield {"type": "start"}
+        yield {"type": "data", "value": 42}
+        yield {"type": "end"}
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 200
+        # Dict chunks should be JSON serialized and concatenated
+        result = r.json()
+        assert '{"type": "start"}' in result
+        assert '{"type": "data", "value": 42}' in result
+        assert '{"type": "end"}' in result
+        # Trace ID should be in response headers
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-12345"
+
+
+def test_streaming_with_evaluation_id_skips_none_chunks(patch_helpers):
+    """Test that streaming with evaluation-id properly skips None chunks."""
+    tracker = patch_helpers
+
+    @entrypoint
+    async def handler(data):
+        yield "a"
+        yield None  # Should be skipped
+        yield "b"
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-123"})
+        assert r.status_code == 200
+        assert r.json() == "ab"  # None skipped
+        assert r.headers.get("X-Gradient-Trace-Id") == "test-trace-id-12345"
 
 
 def test_shutdown_event_calls_tracker_aclose(patch_helpers):

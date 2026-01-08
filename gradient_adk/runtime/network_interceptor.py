@@ -139,13 +139,10 @@ class NetworkInterceptor:
             )
 
             # Don't read response body for streaming responses - it would buffer the entire stream!
-            # Check if this is a streaming response by looking at headers or response type
-            is_streaming = (
-                response.headers.get("transfer-encoding") == "chunked"
-                or "text/event-stream" in response.headers.get("content-type", "")
-                or hasattr(response, "aiter_bytes")
-                or hasattr(response, "aiter_lines")
-            )
+            # Check if this is a streaming response by looking at response headers
+            # Note: Only check content-type for SSE, not transfer-encoding (chunked is common for both)
+            content_type = response.headers.get("content-type", "")
+            is_streaming = "text/event-stream" in content_type
 
             if not is_streaming:
                 response_payload = await _global_interceptor._extract_response_payload(

@@ -1,4 +1,5 @@
 import pytest
+import os
 from unittest.mock import MagicMock, patch
 from langgraph.graph import StateGraph
 
@@ -8,7 +9,6 @@ from gradient_adk.runtime.langgraph.langgraph_instrumentor import (
     _transform_kbaas_response,
     _get_captured_payloads_with_type,
 )
-
 
 # -----------------------------
 # Fixtures
@@ -212,14 +212,14 @@ def test_transform_kbaas_response_converts_text_content_to_page_content():
         "results": [
             {
                 "metadata": {"source": "doc1.pdf", "page": 1},
-                "text_content": "This is the document content."
+                "text_content": "This is the document content.",
             },
             {
                 "metadata": {"source": "doc2.pdf", "page": 2},
-                "text_content": "Another document chunk."
-            }
+                "text_content": "Another document chunk.",
+            },
         ],
-        "total_results": 2
+        "total_results": 2,
     }
 
     transformed = _transform_kbaas_response(response)
@@ -241,10 +241,7 @@ def test_transform_kbaas_response_converts_text_content_to_page_content():
 
 def test_transform_kbaas_response_handles_empty_results():
     """Test that empty results list is handled correctly."""
-    response = {
-        "results": [],
-        "total_results": 0
-    }
+    response = {"results": [], "total_results": 0}
 
     transformed = _transform_kbaas_response(response)
 
@@ -257,20 +254,17 @@ def test_transform_kbaas_response_preserves_items_without_text_content():
     """Test that items without text_content are preserved unchanged."""
     response = {
         "results": [
-            {
-                "metadata": {"source": "doc1.pdf"},
-                "text_content": "Has text content."
-            },
+            {"metadata": {"source": "doc1.pdf"}, "text_content": "Has text content."},
             {
                 "metadata": {"source": "doc2.pdf"},
-                "page_content": "Already has page_content."
+                "page_content": "Already has page_content.",
             },
             {
                 "metadata": {"source": "doc3.pdf"}
                 # No text_content or page_content
-            }
+            },
         ],
-        "total_results": 3
+        "total_results": 3,
     }
 
     transformed = _transform_kbaas_response(response)
@@ -318,15 +312,15 @@ def test_transform_kbaas_response_hierarchical_kb_with_parent_chunk():
             {
                 "metadata": {"source": "doc1.pdf", "page": 1},
                 "text_content": "This is the embedded chunk.",
-                "parent_chunk_text": "This is the full parent context with more information."
+                "parent_chunk_text": "This is the full parent context with more information.",
             },
             {
                 "metadata": {"source": "doc2.pdf", "page": 2},
                 "text_content": "Another embedded chunk.",
-                "parent_chunk_text": "Another parent context."
-            }
+                "parent_chunk_text": "Another parent context.",
+            },
         ],
-        "total_results": 2
+        "total_results": 2,
     }
 
     transformed = _transform_kbaas_response(response)
@@ -336,7 +330,10 @@ def test_transform_kbaas_response_hierarchical_kb_with_parent_chunk():
     assert len(transformed) == 2
 
     # parent_chunk_text should become page_content
-    assert transformed[0]["page_content"] == "This is the full parent context with more information."
+    assert (
+        transformed[0]["page_content"]
+        == "This is the full parent context with more information."
+    )
     assert transformed[1]["page_content"] == "Another parent context."
 
     # text_content should become embedded_content
@@ -359,10 +356,10 @@ def test_transform_kbaas_response_hierarchical_kb_parent_only():
         "results": [
             {
                 "metadata": {"source": "doc1.pdf"},
-                "parent_chunk_text": "Parent context only."
+                "parent_chunk_text": "Parent context only.",
             }
         ],
-        "total_results": 1
+        "total_results": 1,
     }
 
     transformed = _transform_kbaas_response(response)
@@ -381,18 +378,18 @@ def test_transform_kbaas_response_mixed_results():
             {
                 "metadata": {"source": "hierarchical.pdf"},
                 "text_content": "Embedded chunk.",
-                "parent_chunk_text": "Full parent context."
+                "parent_chunk_text": "Full parent context.",
             },
             {
                 "metadata": {"source": "standard.pdf"},
-                "text_content": "Standard KB chunk."
+                "text_content": "Standard KB chunk.",
             },
             {
                 "metadata": {"source": "empty.pdf"}
                 # No content fields
-            }
+            },
         ],
-        "total_results": 3
+        "total_results": 3,
     }
 
     transformed = _transform_kbaas_response(response)
@@ -426,7 +423,7 @@ def test_retriever_hit_sets_metadata(tracker, interceptor):
     mock_captured.request_payload = {"query": "test query"}
     mock_captured.response_payload = {
         "results": [{"text_content": "doc content", "metadata": {}}],
-        "total_results": 1
+        "total_results": 1,
     }
 
     interceptor.hits_since.return_value = 1
@@ -447,7 +444,10 @@ def test_retriever_hit_sets_metadata(tracker, interceptor):
     # NodeExecution record is arg0 to on_node_end
     exec_rec = tracker.on_node_end.call_args[0][0]
     assert exec_rec.metadata.get("is_retriever_call") is True
-    assert exec_rec.metadata.get("is_llm_call") is None or exec_rec.metadata.get("is_llm_call") is False
+    assert (
+        exec_rec.metadata.get("is_llm_call") is None
+        or exec_rec.metadata.get("is_llm_call") is False
+    )
 
 
 def test_retriever_response_is_transformed(tracker, interceptor):
@@ -458,9 +458,12 @@ def test_retriever_response_is_transformed(tracker, interceptor):
     mock_captured.request_payload = {"query": "test query"}
     mock_captured.response_payload = {
         "results": [
-            {"text_content": "Document content here", "metadata": {"source": "test.pdf"}}
+            {
+                "text_content": "Document content here",
+                "metadata": {"source": "test.pdf"},
+            }
         ],
-        "total_results": 1
+        "total_results": 1,
     }
 
     interceptor.hits_since.return_value = 1
@@ -514,7 +517,10 @@ def test_inference_call_still_sets_llm_metadata(tracker, interceptor):
     # NodeExecution record is arg0 to on_node_end
     exec_rec = tracker.on_node_end.call_args[0][0]
     assert exec_rec.metadata.get("is_llm_call") is True
-    assert exec_rec.metadata.get("is_retriever_call") is None or exec_rec.metadata.get("is_retriever_call") is False
+    assert (
+        exec_rec.metadata.get("is_retriever_call") is None
+        or exec_rec.metadata.get("is_retriever_call") is False
+    )
 
 
 def test_get_captured_payloads_with_type_inference_url():
