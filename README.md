@@ -191,31 +191,104 @@ gradient agent evaluate \
 ```
 
 
-## Trace Capture
+## Tracing
 
-The ADK runtime automatically captures detailed traces:
+The ADK provides comprehensive tracing capabilities to capture and analyze your agent's execution. You can use **decorators** for wrapping functions or **programmatic functions** for manual span creation.
 
-### What Gets Traced
+### What Gets Traced Automatically
 - **LangGraph Nodes**: All node executions, state transitions, and edges (including LLM calls, tool calls, and DigitalOcean Knowledge Base calls)
-- **LLM Calls**: Function decorated with `@trace_llm`
-- **Tool Calls**: Functions decorated with `@trace_tool`
-- **Retriever Calls**: Functions decorated with `@trace_retriever`
 - **HTTP Requests**: Request/response payloads for LLM API calls
 - **Errors**: Full exception details and stack traces
 - **Streaming Responses**: Individual chunks and aggregated outputs
 
-### Available Decorators
-```python
-from gradient_adk import trace_llm, trace_tool, trace_retriever
+### Tracing Decorators
 
-@trace_llm("model_call")      # For LLM/model invocations
-@trace_tool("calculator")      # For tool/function calls
-@trace_retriever("db_search")  # For retrieval/search operations
+Use decorators to automatically trace function executions:
+
+```python
+from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever
+
+@trace_llm("model_call")
+async def call_model(prompt: str):
+    """LLM spans capture model calls with token usage."""
+    response = await llm.generate(prompt)
+    return response
+
+@trace_tool("calculator")
+async def calculate(x: int, y: int):
+    """Tool spans capture function/tool execution."""
+    return x + y
+
+@trace_retriever("vector_search")
+async def search_docs(query: str):
+    """Retriever spans capture search/lookup operations."""
+    results = await vector_db.search(query)
+    return results
+
+@entrypoint
+async def main(input: dict, context: dict):
+    docs = await search_docs(input["query"])
+    result = await calculate(5, 10)
+    response = await call_model(f"Context: {docs}")
+    return response
 ```
 
-These decorators are used to log steps or spans of your agent workflow that are not automatically captured.  These will log things like the input, output, and step duration and make them available in your agent's traces and for use in agent evaluations.
+### Programmatic Span Functions
+
+For more control over span creation, use the programmatic functions. These are useful when you can't use decorators or need to add spans for code you don't control:
+
+```python
+from gradient_adk import entrypoint, add_llm_span, add_tool_span, add_agent_span
+
+@entrypoint
+async def main(input: dict, context: dict):
+    # Add an LLM span with detailed metadata
+    response = await external_llm_call(input["query"])
+    add_llm_span(
+        name="external_llm_call",
+        input={"messages": [{"role": "user", "content": input["query"]}]},
+        output={"response": response},
+        model="gpt-4",
+        num_input_tokens=100,
+        num_output_tokens=50,
+        temperature=0.7,
+    )
+
+    # Add a tool span
+    tool_result = await run_tool(input["data"])
+    add_tool_span(
+        name="data_processor",
+        input={"data": input["data"]},
+        output={"result": tool_result},
+        tool_call_id="call_abc123",
+        metadata={"tool_version": "1.0"},
+    )
+
+    # Add an agent span for sub-agent calls
+    agent_result = await call_sub_agent(input["task"])
+    add_agent_span(
+        name="research_agent",
+        input={"task": input["task"]},
+        output={"result": agent_result},
+        metadata={"agent_type": "research"},
+        tags=["sub-agent", "research"],
+    )
+
+    return {"response": response, "tool_result": tool_result, "agent_result": agent_result}
+```
+
+#### Available Span Functions
+
+| Function | Description | Key Optional Fields |
+|----------|-------------|---------------------|
+| `add_llm_span()` | Record LLM/model calls | `model`, `temperature`, `num_input_tokens`, `num_output_tokens`, `total_tokens`, `tools`, `time_to_first_token_ns` |
+| `add_tool_span()` | Record tool/function executions | `tool_call_id` |
+| `add_agent_span()` | Record agent/sub-agent executions | — |
+
+**Common optional fields for all span functions:** `duration_ns`, `metadata`, `tags`, `status_code`
 
 ### Viewing Traces
+
 Traces are:
 - Automatically sent to DigitalOcean's Gradient Platform
 - Available in real-time through the web console
