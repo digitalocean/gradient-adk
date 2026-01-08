@@ -8,7 +8,20 @@ with automatic support for both regular and streaming responses.
 from __future__ import annotations
 import inspect
 import json
+from dataclasses import dataclass
 from typing import Callable, Optional, Any, Dict, List
+
+
+@dataclass
+class RequestContext:
+    """Context passed to entrypoint functions containing request metadata.
+
+    Attributes:
+        session_id: The session ID for the request, if provided.
+    """
+
+    session_id: Optional[str] = None
+
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
@@ -144,12 +157,21 @@ def entrypoint(func: Callable) -> Callable:
 
         is_evaluation = "evaluation-id" in req.headers
 
+        # Extract session ID from headers
+        session_id = req.headers.get("session-id")
+        context = RequestContext(session_id=session_id)
+
         # Initialize tracker
         tr = None
         try:
             tr = get_tracker()
             if tr:
-                tr.on_request_start(func.__name__, body, is_evaluation=is_evaluation)
+                tr.on_request_start(
+                    func.__name__,
+                    body,
+                    is_evaluation=is_evaluation,
+                    session_id=session_id,
+                )
         except Exception:
             pass
 
@@ -159,7 +181,7 @@ def entrypoint(func: Callable) -> Callable:
                 if num_params == 1:
                     user_gen = func(body)
                 else:
-                    user_gen = func(body, None)
+                    user_gen = func(body, context)
             except Exception as e:
                 if tr:
                     try:
@@ -232,9 +254,9 @@ def entrypoint(func: Callable) -> Callable:
                     result = func(body)
             else:
                 if inspect.iscoroutinefunction(func):
-                    result = await func(body, None)
+                    result = await func(body, context)
                 else:
-                    result = func(body, None)
+                    result = func(body, context)
         except Exception as e:
             if tr:
                 try:

@@ -243,8 +243,10 @@ class TestADKAgentsRun:
 
             # Check for helpful error message
             combined_output = result.stdout + result.stderr
-            assert "error" in combined_output.lower() or "configuration" in combined_output.lower(), \
-                f"Expected error about missing configuration, got: {combined_output}"
+            assert (
+                "error" in combined_output.lower()
+                or "configuration" in combined_output.lower()
+            ), f"Expected error about missing configuration, got: {combined_output}"
             logger.info("Correctly failed without configuration")
 
     @pytest.mark.cli
@@ -282,12 +284,17 @@ class TestADKAgentsRun:
             )
 
             # Should fail
-            assert result.returncode != 0, "Command should have failed with missing entrypoint"
+            assert (
+                result.returncode != 0
+            ), "Command should have failed with missing entrypoint"
 
             # Check for helpful error message
             combined_output = result.stdout + result.stderr
-            assert "error" in combined_output.lower() or "not exist" in combined_output.lower() or "nonexistent" in combined_output.lower(), \
-                f"Expected error about missing entrypoint, got: {combined_output}"
+            assert (
+                "error" in combined_output.lower()
+                or "not exist" in combined_output.lower()
+                or "nonexistent" in combined_output.lower()
+            ), f"Expected error about missing entrypoint, got: {combined_output}"
             logger.info("Correctly failed with missing entrypoint file")
 
     @pytest.mark.cli
@@ -302,10 +309,12 @@ class TestADKAgentsRun:
 
             # Create a Python file without @entrypoint decorator
             main_py = temp_path / "main.py"
-            main_py.write_text("""
+            main_py.write_text(
+                """
 def main(query, context):
     return {"result": "no decorator"}
-""")
+"""
+            )
 
             # Create .gradient directory and config
             gradient_dir = temp_path / ".gradient"
@@ -320,13 +329,22 @@ def main(query, context):
             with open(gradient_dir / "agent.yml", "w") as f:
                 yaml.safe_dump(config, f)
 
-            logger.info(f"Testing agent run with invalid entrypoint (no decorator) in {temp_dir}")
+            logger.info(
+                f"Testing agent run with invalid entrypoint (no decorator) in {temp_dir}"
+            )
 
             # Run gradient agent run
             # This might start but fail to find fastapi_app, or fail on validation
             # Either way it should not succeed
             process = subprocess.Popen(
-                ["gradient", "agent", "run", "--no-dev", "--port", str(find_free_port())],
+                [
+                    "gradient",
+                    "agent",
+                    "run",
+                    "--no-dev",
+                    "--port",
+                    str(find_free_port()),
+                ],
                 cwd=temp_dir,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -339,7 +357,7 @@ def main(query, context):
 
                 # Check if process exited with error
                 return_code = process.poll()
-                
+
                 if return_code is None:
                     # Process is still running - try to connect and see if it works
                     # (It shouldn't work properly without @entrypoint)
@@ -347,7 +365,9 @@ def main(query, context):
                     logger.info("Process started but likely not functioning correctly")
                 else:
                     # Process exited - check return code
-                    assert return_code != 0 or return_code is None, "Expected process to fail or not work correctly"
+                    assert (
+                        return_code != 0 or return_code is None
+                    ), "Expected process to fail or not work correctly"
                     logger.info(f"Process correctly exited with code {return_code}")
             finally:
                 cleanup_process(process)
@@ -397,7 +417,11 @@ def main(query, context):
             # Test with additional fields
             response = requests.post(
                 f"http://localhost:{port}/run",
-                json={"prompt": "test", "extra_field": "value", "nested": {"key": "val"}},
+                json={
+                    "prompt": "test",
+                    "extra_field": "value",
+                    "nested": {"key": "val"},
+                },
                 timeout=10,
             )
             assert response.status_code == 200
@@ -417,6 +441,87 @@ def main(query, context):
             data = response.json()
             assert data["echo"] == "Hello `} E1-('"
             logger.info("Unicode test passed")
+
+        finally:
+            cleanup_process(process)
+
+    @pytest.mark.cli
+    def test_agent_run_session_id_header_passthrough(self, setup_agent_in_temp):
+        """
+        Test that the Session-Id header is passed to the agent context.
+        Verifies:
+        - Session-Id header is extracted from request
+        - Session-Id is available in RequestContext
+        - Agent can return session_id in response
+        """
+        logger = logging.getLogger(__name__)
+        temp_dir = setup_agent_in_temp
+        port = find_free_port()
+        process = None
+
+        try:
+            logger.info(f"Starting agent on port {port} in {temp_dir}")
+
+            # Start the agent server
+            process = subprocess.Popen(
+                [
+                    "gradient",
+                    "agent",
+                    "run",
+                    "--port",
+                    str(port),
+                    "--no-dev",
+                ],
+                cwd=temp_dir,
+                start_new_session=True,
+            )
+
+            # Wait for server to be ready
+            server_ready = wait_for_server(port, timeout=30)
+            assert server_ready, "Server did not start within timeout"
+
+            # Test with Session-Id header
+            test_session_id = "test-session-12345"
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello"},
+                headers={"Session-Id": test_session_id},
+                timeout=10,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert (
+                data["session_id"] == test_session_id
+            ), f"Expected session_id '{test_session_id}', got '{data.get('session_id')}'"
+            logger.info(f"Session-Id header passthrough test passed: {data}")
+
+            # Test without Session-Id header (should be None)
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello without session"},
+                timeout=10,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert (
+                data["session_id"] is None
+            ), f"Expected session_id to be None, got '{data.get('session_id')}'"
+            logger.info("No Session-Id header test passed (session_id is None)")
+
+            # Test with lowercase session-id header (case-insensitive)
+            lowercase_session_id = "lowercase-session-abc"
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello with lowercase header"},
+                headers={"session-id": lowercase_session_id},
+                timeout=10,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            assert (
+                data["session_id"] == lowercase_session_id
+            ), f"Expected session_id '{lowercase_session_id}', got '{data.get('session_id')}'"
+            logger.info("Lowercase session-id header test passed")
 
         finally:
             cleanup_process(process)
@@ -468,18 +573,18 @@ def main(query, context):
 
                 # Verify it's a streaming response (text/event-stream)
                 content_type = response.headers.get("content-type", "")
-                assert "text/event-stream" in content_type, (
-                    f"Expected text/event-stream content type for streaming, got: {content_type}"
-                )
+                assert (
+                    "text/event-stream" in content_type
+                ), f"Expected text/event-stream content type for streaming, got: {content_type}"
 
                 # Collect chunks to verify content
                 chunks = list(response.iter_content(decode_unicode=True))
                 full_content = "".join(c for c in chunks if c)
 
                 # Verify the content contains the expected streamed output
-                assert "Echo:" in full_content or "Hello, World!" in full_content, (
-                    f"Expected streamed content to contain prompt, got: {full_content}"
-                )
+                assert (
+                    "Echo:" in full_content or "Hello, World!" in full_content
+                ), f"Expected streamed content to contain prompt, got: {full_content}"
 
                 logger.info(f"Streaming response received with {len(chunks)} chunks")
                 logger.info(f"Full content: {full_content}")
@@ -535,16 +640,16 @@ def main(query, context):
 
             # Verify it's NOT a streaming response (should be application/json)
             content_type = response.headers.get("content-type", "")
-            assert "application/json" in content_type, (
-                f"Expected application/json content type for evaluation mode, got: {content_type}"
-            )
+            assert (
+                "application/json" in content_type
+            ), f"Expected application/json content type for evaluation mode, got: {content_type}"
 
             # Verify the response contains the complete content
             result = response.json()
             expected_content = "Echo: Hello, World! [DONE]"
-            assert result == expected_content, (
-                f"Expected complete collected content '{expected_content}', got: {result}"
-            )
+            assert (
+                result == expected_content
+            ), f"Expected complete collected content '{expected_content}', got: {result}"
 
             logger.info(f"Single JSON response received: {result}")
 

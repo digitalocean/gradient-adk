@@ -54,12 +54,17 @@ class DigitalOceanTracesTracker:
         self._is_evaluation: bool = False
 
     def on_request_start(
-        self, entrypoint: str, inputs: Dict[str, Any], is_evaluation: bool = False
+        self,
+        entrypoint: str,
+        inputs: Dict[str, Any],
+        is_evaluation: bool = False,
+        session_id: Optional[str] = None,
     ) -> None:
         # NEW: reset buffers per request
         self._live.clear()
         self._done.clear()
         self._is_evaluation = is_evaluation
+        self._session_id = session_id
         self._req = {"entrypoint": entrypoint, "inputs": inputs}
 
     def _as_async_iterable_and_setter(
@@ -299,13 +304,14 @@ class DigitalOceanTracesTracker:
                 agent_workspace_name=self._ws,
                 agent_deployment_name=self._dep,
                 traces=[trace],
+                session_id=getattr(self, "_session_id", None),
             )
             result = await self._client.create_traces(req)
             # Return first trace_uuid if available
             if result.trace_uuids:
                 return result.trace_uuids[0]
             return None
-        except Exception as e:
+        except Exception:
             # never break user code on export errors
             return None
 
