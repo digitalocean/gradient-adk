@@ -231,13 +231,24 @@ def _trace_base(
                         collected.append(chunk_str)
                         yield chunk
 
-                    # Check for network activity (LLM calls) - only if not already marked
-                    if span_type is None:
-                        try:
-                            if interceptor.hits_since(network_token) > 0:
-                                _ensure_meta(span)["is_llm_call"] = True
-                        except Exception:
-                            pass
+                    # Check for network activity and capture LLM payloads
+                    try:
+                        has_network_hits = interceptor.hits_since(network_token) > 0
+                        # For explicitly marked LLM spans OR auto-detected network activity
+                        if has_network_hits or span_type == SpanType.LLM:
+                            meta = _ensure_meta(span)
+                            if span_type is None and has_network_hits:
+                                meta["is_llm_call"] = True
+                            # Get captured request/response payloads for LLM metadata extraction
+                            captured = interceptor.get_captured_requests_since(network_token)
+                            if captured:
+                                call = captured[0]
+                                if call.request_payload:
+                                    meta["llm_request_payload"] = call.request_payload
+                                if call.response_payload:
+                                    meta["llm_response_payload"] = call.response_payload
+                    except Exception:
+                        pass
 
                     # Stream complete - finalize span with collected content
                     tracker.on_node_end(span, {"content": "".join(collected)})
@@ -282,13 +293,24 @@ def _trace_base(
                 try:
                     result = await func(*args, **kwargs)
 
-                    # Check for network activity (LLM calls) - only if not already marked
-                    if span_type is None:
-                        try:
-                            if interceptor.hits_since(network_token) > 0:
-                                _ensure_meta(span)["is_llm_call"] = True
-                        except Exception:
-                            pass
+                    # Check for network activity and capture LLM payloads
+                    try:
+                        has_network_hits = interceptor.hits_since(network_token) > 0
+                        # For explicitly marked LLM spans OR auto-detected network activity
+                        if has_network_hits or span_type == SpanType.LLM:
+                            meta = _ensure_meta(span)
+                            if span_type is None and has_network_hits:
+                                meta["is_llm_call"] = True
+                            # Get captured request/response payloads for LLM metadata extraction
+                            captured = interceptor.get_captured_requests_since(network_token)
+                            if captured:
+                                call = captured[0]
+                                if call.request_payload:
+                                    meta["llm_request_payload"] = call.request_payload
+                                if call.response_payload:
+                                    meta["llm_response_payload"] = call.response_payload
+                    except Exception:
+                        pass
 
                     # If the result is an async generator, wrap it so we can collect output
                     # without double-iterating. We delay on_node_end until the stream is consumed.
@@ -370,13 +392,24 @@ def _trace_base(
                 try:
                     result = func(*args, **kwargs)
 
-                    # Check for network activity (LLM calls) - only if not already marked
-                    if span_type is None:
-                        try:
-                            if interceptor.hits_since(network_token) > 0:
-                                _ensure_meta(span)["is_llm_call"] = True
-                        except Exception:
-                            pass
+                    # Check for network activity and capture LLM payloads
+                    try:
+                        has_network_hits = interceptor.hits_since(network_token) > 0
+                        # For explicitly marked LLM spans OR auto-detected network activity
+                        if has_network_hits or span_type == SpanType.LLM:
+                            meta = _ensure_meta(span)
+                            if span_type is None and has_network_hits:
+                                meta["is_llm_call"] = True
+                            # Get captured request/response payloads for LLM metadata extraction
+                            captured = interceptor.get_captured_requests_since(network_token)
+                            if captured:
+                                call = captured[0]
+                                if call.request_payload:
+                                    meta["llm_request_payload"] = call.request_payload
+                                if call.response_payload:
+                                    meta["llm_response_payload"] = call.response_payload
+                    except Exception:
+                        pass
 
                     # Check if result is an async generator - pass directly without snapshotting
                     if result is not None and (
