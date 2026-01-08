@@ -38,7 +38,7 @@ import json
 from copy import deepcopy
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, Callable, Dict, Optional, Tuple, TypeVar
+from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .runtime.interfaces import NodeExecution
 from .runtime.helpers import get_tracker
@@ -476,3 +476,199 @@ def trace_tool(name: Optional[str] = None) -> Callable[[F], F]:
             return results
     """
     return _trace_base(name, span_type=SpanType.TOOL)
+
+
+# =============================================================================
+# Programmatic Span Functions
+# =============================================================================
+
+
+def add_llm_span(
+    name: str,
+    input: Any,
+    output: Any,
+    *,
+    model: Optional[str] = None,
+    tools: Optional[List[Dict[str, Any]]] = None,
+    num_input_tokens: Optional[int] = None,
+    num_output_tokens: Optional[int] = None,
+    total_tokens: Optional[int] = None,
+    temperature: Optional[float] = None,
+    time_to_first_token_ns: Optional[int] = None,
+    duration_ns: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    status_code: Optional[int] = None,
+) -> None:
+    """
+    Add an LLM span to the current trace.
+
+    Args:
+        name: Name for the span (e.g., "call_gpt", "embedding_request")
+        input: The input to the LLM call (e.g., messages, prompt)
+        output: The output from the LLM call (e.g., response, completion)
+        model: Model name (e.g., "gpt-4", "claude-3")
+        tools: Tool definitions passed to the model
+        num_input_tokens: Number of input/prompt tokens
+        num_output_tokens: Number of output/completion tokens
+        total_tokens: Total tokens used
+        temperature: Temperature setting used
+        time_to_first_token_ns: Time to first token in nanoseconds (for streaming)
+        duration_ns: Duration of the call in nanoseconds
+        metadata: Additional custom metadata
+        tags: Tags for the span
+        status_code: HTTP status code if applicable
+
+    Example:
+        add_llm_span(
+            name="call_gpt",
+            input={"messages": [{"role": "user", "content": "Hello"}]},
+            output={"response": "Hi there!"},
+            model="gpt-4",
+            num_input_tokens=10,
+            num_output_tokens=5,
+        )
+    """
+    tracker = get_tracker()
+    if not tracker:
+        return
+
+    span = _create_span(name, _freeze(input))
+    meta = _ensure_meta(span)
+    meta["is_llm_call"] = True
+
+    if model is not None:
+        meta["model_name"] = model
+    if tools is not None:
+        meta["llm_request_payload"] = {"tools": tools}
+    if temperature is not None:
+        if "llm_request_payload" not in meta:
+            meta["llm_request_payload"] = {}
+        meta["llm_request_payload"]["temperature"] = temperature
+    if time_to_first_token_ns is not None:
+        meta["time_to_first_token_ns"] = time_to_first_token_ns
+    if num_input_tokens is not None or num_output_tokens is not None or total_tokens is not None:
+        if "llm_response_payload" not in meta:
+            meta["llm_response_payload"] = {}
+        meta["llm_response_payload"]["usage"] = {
+            "prompt_tokens": num_input_tokens,
+            "completion_tokens": num_output_tokens,
+            "total_tokens": total_tokens,
+        }
+    if tags is not None:
+        meta["tags"] = tags
+    if status_code is not None:
+        meta["status_code"] = status_code
+    if metadata is not None:
+        meta["custom_metadata"] = metadata
+    if duration_ns is not None:
+        meta["duration_ns"] = duration_ns
+
+    tracker.on_node_start(span)
+    tracker.on_node_end(span, _freeze(output))
+
+
+def add_tool_span(
+    name: str,
+    input: Any,
+    output: Any,
+    *,
+    tool_call_id: Optional[str] = None,
+    duration_ns: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    status_code: Optional[int] = None,
+) -> None:
+    """
+    Add a tool span to the current trace.
+
+    Args:
+        name: Name for the span (e.g., "calculator", "web_search")
+        input: The input to the tool (e.g., function arguments)
+        output: The output from the tool (e.g., result)
+        tool_call_id: Tool call identifier (from LLM tool calling)
+        duration_ns: Duration of the call in nanoseconds
+        metadata: Additional custom metadata
+        tags: Tags for the span
+        status_code: HTTP status code if applicable
+
+    Example:
+        add_tool_span(
+            name="calculator",
+            input={"operation": "add", "x": 5, "y": 3},
+            output={"result": 8},
+            tool_call_id="call_abc123",
+        )
+    """
+    tracker = get_tracker()
+    if not tracker:
+        return
+
+    span = _create_span(name, _freeze(input))
+    meta = _ensure_meta(span)
+    meta["is_tool_call"] = True
+
+    if tool_call_id is not None:
+        meta["tool_call_id"] = tool_call_id
+    if tags is not None:
+        meta["tags"] = tags
+    if status_code is not None:
+        meta["status_code"] = status_code
+    if metadata is not None:
+        meta["custom_metadata"] = metadata
+    if duration_ns is not None:
+        meta["duration_ns"] = duration_ns
+
+    tracker.on_node_start(span)
+    tracker.on_node_end(span, _freeze(output))
+
+
+def add_agent_span(
+    name: str,
+    input: Any,
+    output: Any,
+    *,
+    duration_ns: Optional[int] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    tags: Optional[List[str]] = None,
+    status_code: Optional[int] = None,
+) -> None:
+    """
+    Add an agent span to the current trace.
+
+    Args:
+        name: Name for the span (e.g., "research_agent", "planning_agent")
+        input: The input to the agent (e.g., query, task)
+        output: The output from the agent (e.g., response, result)
+        duration_ns: Duration of the agent execution in nanoseconds
+        metadata: Additional custom metadata
+        tags: Tags for the span
+        status_code: HTTP status code if applicable
+
+    Example:
+        add_agent_span(
+            name="research_agent",
+            input={"query": "What is machine learning?"},
+            output={"answer": "Machine learning is..."},
+            metadata={"model": "gpt-4"},
+        )
+    """
+    tracker = get_tracker()
+    if not tracker:
+        return
+
+    span = _create_span(name, _freeze(input))
+    meta = _ensure_meta(span)
+    meta["is_agent_call"] = True
+
+    if tags is not None:
+        meta["tags"] = tags
+    if status_code is not None:
+        meta["status_code"] = status_code
+    if metadata is not None:
+        meta["custom_metadata"] = metadata
+    if duration_ns is not None:
+        meta["duration_ns"] = duration_ns
+
+    tracker.on_node_start(span)
+    tracker.on_node_end(span, _freeze(output))

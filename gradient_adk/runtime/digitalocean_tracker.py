@@ -474,8 +474,65 @@ class DigitalOceanTracesTracker:
                 type=span_type,
                 retriever=retriever_details,
             )
+        elif metadata.get("is_agent_call"):
+            span_type = TraceSpanType.TRACE_SPAN_TYPE_AGENT
+
+            # Calculate duration - use provided duration_ns if available
+            duration_ns = metadata.get("duration_ns")
+            if duration_ns is None and ex.start_time and ex.end_time:
+                duration_ns = int(
+                    (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
+                )
+
+            # Build agent-specific details
+            agent_common = SpanCommon(
+                duration_ns=duration_ns,
+                metadata=metadata.get("custom_metadata"),
+                tags=metadata.get("tags"),
+                status_code=metadata.get("status_code", 200 if ex.error is None else 500),
+            )
+
+            return Span(
+                created_at=_utc(ex.start_time),
+                name=ex.node_name,
+                input=inp,
+                output=out,
+                type=span_type,
+                common=agent_common,
+            )
+        elif metadata.get("is_tool_call"):
+            span_type = TraceSpanType.TRACE_SPAN_TYPE_TOOL
+
+            # Calculate duration - use provided duration_ns if available
+            duration_ns = metadata.get("duration_ns")
+            if duration_ns is None and ex.start_time and ex.end_time:
+                duration_ns = int(
+                    (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
+                )
+
+            # Build tool-specific details
+            tool_common = SpanCommon(
+                duration_ns=duration_ns,
+                metadata=metadata.get("custom_metadata"),
+                tags=metadata.get("tags"),
+                status_code=metadata.get("status_code", 200 if ex.error is None else 500),
+            )
+
+            tool_details = ToolSpanDetails(
+                common=tool_common,
+                tool_call_id=metadata.get("tool_call_id"),
+            )
+
+            return Span(
+                created_at=_utc(ex.start_time),
+                name=ex.node_name,
+                input=inp,
+                output=out,
+                type=span_type,
+                tool=tool_details,
+            )
         else:
-            # Default to tool span
+            # Default to tool span (for backward compatibility)
             span_type = TraceSpanType.TRACE_SPAN_TYPE_TOOL
 
             # Calculate duration
