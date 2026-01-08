@@ -18,9 +18,12 @@ from .logging import get_logger
 
 logger = get_logger(__name__)
 
-from gradient_adk.runtime.langgraph.helpers import capture_graph, get_tracker
+# Initialize framework instrumentation using the centralized registry
+# This is idempotent and will only install instrumentation once
+# Each instrumentor checks for its own environment variable to allow disabling
+from gradient_adk.runtime.helpers import capture_all, get_tracker
 
-capture_graph()
+capture_all()
 
 
 class _StreamingIteratorWithTracking:

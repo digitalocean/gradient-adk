@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import functools
 import inspect
+import json
 import os
+import time
 import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
@@ -330,6 +332,7 @@ class LangGraphInstrumentor:
             ret: Any,
             intr,
             tok,
+            time_to_first_token_ns: Optional[int] = None,
         ):
             # NOTE: Async generators should be handled by the wrapper functions
             # (_wrap_async_func, _wrap_sync_func, etc.) BEFORE calling _finish_ok.
@@ -346,11 +349,23 @@ class LangGraphInstrumentor:
                 meta = _ensure_meta(rec)
                 if is_llm:
                     meta["is_llm_call"] = True
+                    # Store raw API payloads for LLM field extraction in tracker
+                    if api_request:
+                        meta["llm_request_payload"] = api_request
+                    if api_response:
+                        meta["llm_response_payload"] = api_response
+                    # Store time-to-first-token if this was a streaming call
+                    if time_to_first_token_ns is not None:
+                        meta["time_to_first_token_ns"] = time_to_first_token_ns
                 elif is_retriever:
                     meta["is_retriever_call"] = True
                 else:
                     # Fallback: assume LLM call for backward compatibility
                     meta["is_llm_call"] = True
+                    if api_request:
+                        meta["llm_request_payload"] = api_request
+                    if api_response:
+                        meta["llm_response_payload"] = api_response
 
                 if api_request or api_response:
                     # Use actual API payloads instead of function args
@@ -398,6 +413,8 @@ class LangGraphInstrumentor:
             @functools.wraps(func)
             async def _wrapped(*a, **kw):
                 rec, snap, intr, tok = _start(node_name, a, kw)
+                # Record start time for TTFT calculation
+                start_time_ns = time.perf_counter_ns()
                 try:
                     ret = await func(*a, **kw)
 
@@ -408,11 +425,16 @@ class LangGraphInstrumentor:
                     ):
 
                         async def _streaming_wrapper(gen):
-                            import json
-
                             collected: list[str] = []
+                            ttft_ns: Optional[int] = None
+                            first_chunk_received = False
                             try:
                                 async for chunk in gen:
+                                    # Record time to first token
+                                    if not first_chunk_received:
+                                        first_chunk_received = True
+                                        ttft_ns = time.perf_counter_ns() - start_time_ns
+
                                     # Convert chunk to string for collection
                                     if isinstance(chunk, bytes):
                                         chunk_str = chunk.decode(
@@ -428,7 +450,7 @@ class LangGraphInstrumentor:
                                     collected.append(chunk_str)
                                     yield chunk
 
-                                # Stream complete - finalize with collected content
+                                # Stream complete - finalize with collected content and TTFT
                                 _finish_ok(
                                     rec,
                                     snap,
@@ -437,6 +459,7 @@ class LangGraphInstrumentor:
                                     {"content": "".join(collected)},
                                     intr,
                                     tok,
+                                    time_to_first_token_ns=ttft_ns,
                                 )
                             except BaseException as e:
                                 _finish_err(rec, intr, tok, e)
@@ -458,6 +481,8 @@ class LangGraphInstrumentor:
             @functools.wraps(func)
             def _wrapped(*a, **kw):
                 rec, snap, intr, tok = _start(node_name, a, kw)
+                # Record start time for TTFT calculation
+                start_time_ns = time.perf_counter_ns()
                 try:
                     ret = func(*a, **kw)
 
@@ -468,11 +493,16 @@ class LangGraphInstrumentor:
                     ):
 
                         async def _streaming_wrapper(gen):
-                            import json
-
                             collected: list[str] = []
+                            ttft_ns: Optional[int] = None
+                            first_chunk_received = False
                             try:
                                 async for chunk in gen:
+                                    # Record time to first token
+                                    if not first_chunk_received:
+                                        first_chunk_received = True
+                                        ttft_ns = time.perf_counter_ns() - start_time_ns
+
                                     # Convert chunk to string for collection
                                     if isinstance(chunk, bytes):
                                         chunk_str = chunk.decode(
@@ -488,7 +518,7 @@ class LangGraphInstrumentor:
                                     collected.append(chunk_str)
                                     yield chunk
 
-                                # Stream complete - finalize with collected content
+                                # Stream complete - finalize with collected content and TTFT
                                 _finish_ok(
                                     rec,
                                     snap,
@@ -497,6 +527,7 @@ class LangGraphInstrumentor:
                                     {"content": "".join(collected)},
                                     intr,
                                     tok,
+                                    time_to_first_token_ns=ttft_ns,
                                 )
                             except BaseException as e:
                                 _finish_err(rec, intr, tok, e)
@@ -518,12 +549,21 @@ class LangGraphInstrumentor:
             @functools.wraps(func)
             async def _wrapped(*a, **kw):
                 rec, snap, intr, tok = _start(node_name, a, kw)
+                # Record start time for TTFT calculation
+                start_time_ns = time.perf_counter_ns()
+                ttft_ns: Optional[int] = None
+                first_chunk_received = False
                 try:
                     # Accumulate a compact, canonical final payload
                     # (string: concatenate; list: extend; else: last write wins)
                     acc: Dict[str, Any] = {}
 
                     async for chunk in func(*a, **kw):
+                        # Record time to first token
+                        if not first_chunk_received:
+                            first_chunk_received = True
+                            ttft_ns = time.perf_counter_ns() - start_time_ns
+
                         # Merge into acc for the final on_node_end payload
                         for k, v in chunk.items():
                             if isinstance(v, str):
@@ -538,8 +578,8 @@ class LangGraphInstrumentor:
                         # Pass the live chunk downstream unchanged
                         yield chunk
 
-                    # Finish the span with the aggregated mapping
-                    _finish_ok(rec, snap, a, kw, acc, intr, tok)
+                    # Finish the span with the aggregated mapping and TTFT
+                    _finish_ok(rec, snap, a, kw, acc, intr, tok, time_to_first_token_ns=ttft_ns)
                 except BaseException as e:
                     _finish_err(rec, intr, tok, e)
                     raise
@@ -550,6 +590,8 @@ class LangGraphInstrumentor:
         def _wrap_runnable_ainvoke(node_name: str, runnable):
             async def _wrapped(*a, **kw):
                 rec, snap, intr, tok = _start(node_name, a, kw)
+                # Record start time for TTFT calculation
+                start_time_ns = time.perf_counter_ns()
                 try:
                     ret = await runnable.ainvoke(*a, **kw)
 
@@ -559,11 +601,16 @@ class LangGraphInstrumentor:
                     ):
 
                         async def _streaming_wrapper(gen):
-                            import json
-
                             collected: list[str] = []
+                            ttft_ns: Optional[int] = None
+                            first_chunk_received = False
                             try:
                                 async for chunk in gen:
+                                    # Record time to first token
+                                    if not first_chunk_received:
+                                        first_chunk_received = True
+                                        ttft_ns = time.perf_counter_ns() - start_time_ns
+
                                     if isinstance(chunk, bytes):
                                         chunk_str = chunk.decode(
                                             "utf-8", errors="replace"
@@ -586,6 +633,7 @@ class LangGraphInstrumentor:
                                     {"content": "".join(collected)},
                                     intr,
                                     tok,
+                                    time_to_first_token_ns=ttft_ns,
                                 )
                             except BaseException as e:
                                 _finish_err(rec, intr, tok, e)
@@ -605,6 +653,8 @@ class LangGraphInstrumentor:
         def _wrap_runnable_invoke(node_name: str, runnable):
             def _wrapped(*a, **kw):
                 rec, snap, intr, tok = _start(node_name, a, kw)
+                # Record start time for TTFT calculation
+                start_time_ns = time.perf_counter_ns()
                 try:
                     ret = runnable.invoke(*a, **kw)
 
@@ -614,11 +664,16 @@ class LangGraphInstrumentor:
                     ):
 
                         async def _streaming_wrapper(gen):
-                            import json
-
                             collected: list[str] = []
+                            ttft_ns: Optional[int] = None
+                            first_chunk_received = False
                             try:
                                 async for chunk in gen:
+                                    # Record time to first token
+                                    if not first_chunk_received:
+                                        first_chunk_received = True
+                                        ttft_ns = time.perf_counter_ns() - start_time_ns
+
                                     if isinstance(chunk, bytes):
                                         chunk_str = chunk.decode(
                                             "utf-8", errors="replace"
@@ -641,6 +696,7 @@ class LangGraphInstrumentor:
                                     {"content": "".join(collected)},
                                     intr,
                                     tok,
+                                    time_to_first_token_ns=ttft_ns,
                                 )
                             except BaseException as e:
                                 _finish_err(rec, intr, tok, e)
