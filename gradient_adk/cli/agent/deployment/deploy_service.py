@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from typing import Protocol
 
+import gradient_adk
 from gradient_adk.logging import get_logger
 from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
 from gradient_adk.digital_ocean_api.models import (
@@ -73,6 +74,7 @@ class AgentDeployService:
         source_dir: Path,
         project_id: str,
         api_token: str,
+        description: str | None = None,
     ) -> str:
         """Deploy an agent to the platform.
 
@@ -90,6 +92,7 @@ class AgentDeployService:
             source_dir: Directory containing the agent code
             project_id: DigitalOcean project ID
             api_token: DigitalOcean API token to include in .env
+            description: Optional description for the deployment (max 1000 chars)
 
         Returns:
             agent_workspace_uuid: UUID of the deployed agent workspace
@@ -125,6 +128,7 @@ class AgentDeployService:
                 agent_deployment_name=agent_deployment_name,
                 code_artifact=code_artifact,
                 project_id=project_id,
+                description=description,
             )
 
             # Poll for deployment completion
@@ -302,6 +306,7 @@ class AgentDeployService:
         agent_deployment_name: str,
         code_artifact: AgentDeploymentCodeArtifact,
         project_id: str,
+        description: str | None = None,
     ) -> str:
         """Create or update the deployment based on what exists.
 
@@ -312,6 +317,7 @@ class AgentDeployService:
             agent_deployment_name: Name of the deployment
             code_artifact: Code artifact metadata
             project_id: Project ID
+            description: Optional description for the deployment
 
         Returns:
             UUID of the created release
@@ -324,6 +330,8 @@ class AgentDeployService:
                 agent_deployment_name=agent_deployment_name,
                 agent_deployment_code_artifact=code_artifact,
                 project_id=project_id,
+                library_version=gradient_adk.__version__,
+                description=description,
             )
             workspace_output = await self.client.create_agent_workspace(workspace_input)
 
@@ -349,6 +357,8 @@ class AgentDeployService:
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
                 agent_deployment_code_artifact=code_artifact,
+                library_version=gradient_adk.__version__,
+                description=description,
             )
             deployment_output = await self.client.create_agent_workspace_deployment(
                 deployment_input
@@ -366,6 +376,7 @@ class AgentDeployService:
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
                 agent_deployment_code_artifact=code_artifact,
+                library_version=gradient_adk.__version__,
             )
             release_output = await self.client.create_agent_deployment_release(
                 release_input

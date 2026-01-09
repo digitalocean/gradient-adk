@@ -474,6 +474,316 @@ async def my_agent(query, context):
             logger.info("Custom entrypoint path configured correctly")
 
     @pytest.mark.cli
+    def test_configure_with_description_happy_path(self):
+        """
+        Test that configure works with a valid description.
+        Verifies that:
+        - The command exits with code 0
+        - Description is saved correctly in config file
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Create an entrypoint file
+            main_py = temp_path / "main.py"
+            main_py.write_text("""
+from gradient_adk import entrypoint
+
+@entrypoint
+async def main(query, context):
+    return {"result": "test"}
+""")
+
+            workspace_name = "test-agent"
+            deployment_name = "main"
+            entrypoint_file = "main.py"
+            description = "This is a test agent that does amazing things."
+
+            logger.info(f"Running gradient agent configure with description in {temp_dir}")
+
+            result = subprocess.run(
+                [
+                    "gradient",
+                    "agent",
+                    "configure",
+                    "--agent-workspace-name",
+                    workspace_name,
+                    "--deployment-name",
+                    deployment_name,
+                    "--entrypoint-file",
+                    entrypoint_file,
+                    "--description",
+                    description,
+                    "--no-interactive",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=temp_dir,
+            )
+
+            assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
+
+            # Verify config file was created with description
+            config_file = temp_path / ".gradient" / "agent.yml"
+            assert config_file.exists(), ".gradient/agent.yml was not created"
+
+            with open(config_file, "r") as f:
+                config = yaml.safe_load(f)
+
+            assert config["agent_name"] == workspace_name
+            assert config["agent_environment"] == deployment_name
+            assert config["entrypoint_file"] == entrypoint_file
+            assert config.get("description") == description, \
+                f"Expected description '{description}', got '{config.get('description')}'"
+
+            logger.info("Description configured correctly")
+
+    @pytest.mark.cli
+    def test_configure_description_too_long(self):
+        """
+        Test that configure fails when description exceeds 1000 characters.
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Create an entrypoint file
+            main_py = temp_path / "main.py"
+            main_py.write_text("""
+from gradient_adk import entrypoint
+
+@entrypoint
+async def main(query, context):
+    return {"result": "test"}
+""")
+
+            # Create a description that exceeds 1000 characters
+            long_description = "x" * 1001
+
+            logger.info(f"Running gradient agent configure with long description in {temp_dir}")
+
+            result = subprocess.run(
+                [
+                    "gradient",
+                    "agent",
+                    "configure",
+                    "--agent-workspace-name",
+                    "test-agent",
+                    "--deployment-name",
+                    "main",
+                    "--entrypoint-file",
+                    "main.py",
+                    "--description",
+                    long_description,
+                    "--no-interactive",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=temp_dir,
+            )
+
+            assert result.returncode != 0, "Command should have failed with long description"
+
+            combined_output = result.stdout + result.stderr
+            assert any(
+                term in combined_output.lower()
+                for term in ["description", "1000", "length", "exceeds", "error"]
+            ), f"Expected error about description length, got: {combined_output}"
+
+            logger.info("Correctly failed with description too long")
+
+    @pytest.mark.cli
+    def test_configure_description_at_max_length(self):
+        """
+        Test that configure works with description at exactly 1000 characters.
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Create an entrypoint file
+            main_py = temp_path / "main.py"
+            main_py.write_text("""
+from gradient_adk import entrypoint
+
+@entrypoint
+async def main(query, context):
+    return {"result": "test"}
+""")
+
+            # Create a description that is exactly 1000 characters
+            max_description = "x" * 1000
+
+            logger.info(f"Running gradient agent configure with max length description in {temp_dir}")
+
+            result = subprocess.run(
+                [
+                    "gradient",
+                    "agent",
+                    "configure",
+                    "--agent-workspace-name",
+                    "test-agent",
+                    "--deployment-name",
+                    "main",
+                    "--entrypoint-file",
+                    "main.py",
+                    "--description",
+                    max_description,
+                    "--no-interactive",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=temp_dir,
+            )
+
+            assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
+
+            # Verify config file has correct description
+            config_file = temp_path / ".gradient" / "agent.yml"
+            with open(config_file, "r") as f:
+                config = yaml.safe_load(f)
+
+            assert config.get("description") == max_description, \
+                f"Expected 1000-char description, got {len(config.get('description', ''))} chars"
+
+            logger.info("Max length description configured correctly")
+
+    @pytest.mark.cli
+    def test_configure_updates_existing_config_with_description(self):
+        """
+        Test that configure can add a description to an existing config.
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Create an entrypoint file
+            main_py = temp_path / "main.py"
+            main_py.write_text("""
+from gradient_adk import entrypoint
+
+@entrypoint
+async def main(query, context):
+    return {"result": "test"}
+""")
+
+            # Create initial config without description
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+            config_file = gradient_dir / "agent.yml"
+
+            initial_config = {
+                "agent_name": "test-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+            with open(config_file, "w") as f:
+                yaml.safe_dump(initial_config, f)
+
+            # Verify initial config has no description
+            with open(config_file, "r") as f:
+                config = yaml.safe_load(f)
+            assert "description" not in config, "Initial config should not have description"
+
+            # Run configure to add description
+            new_description = "Adding a description to existing config."
+
+            logger.info(f"Running gradient agent configure to add description in {temp_dir}")
+
+            result = subprocess.run(
+                [
+                    "gradient",
+                    "agent",
+                    "configure",
+                    "--agent-workspace-name",
+                    "test-agent",
+                    "--deployment-name",
+                    "main",
+                    "--entrypoint-file",
+                    "main.py",
+                    "--description",
+                    new_description,
+                    "--no-interactive",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=temp_dir,
+            )
+
+            assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
+
+            # Verify config was updated with description
+            with open(config_file, "r") as f:
+                config = yaml.safe_load(f)
+
+            assert config.get("description") == new_description, \
+                f"Expected description '{new_description}', got '{config.get('description')}'"
+
+            logger.info("Description successfully added to existing config")
+
+    @pytest.mark.cli
+    def test_configure_without_description_does_not_add_description(self):
+        """
+        Test that configure without --description does not add a description field.
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Create an entrypoint file
+            main_py = temp_path / "main.py"
+            main_py.write_text("""
+from gradient_adk import entrypoint
+
+@entrypoint
+async def main(query, context):
+    return {"result": "test"}
+""")
+
+            logger.info(f"Running gradient agent configure without description in {temp_dir}")
+
+            result = subprocess.run(
+                [
+                    "gradient",
+                    "agent",
+                    "configure",
+                    "--agent-workspace-name",
+                    "test-agent",
+                    "--deployment-name",
+                    "main",
+                    "--entrypoint-file",
+                    "main.py",
+                    "--no-interactive",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                cwd=temp_dir,
+            )
+
+            assert result.returncode == 0, f"Command failed with stderr: {result.stderr}"
+
+            # Verify config file does NOT have description field
+            config_file = temp_path / ".gradient" / "agent.yml"
+            with open(config_file, "r") as f:
+                config = yaml.safe_load(f)
+
+            assert "description" not in config, \
+                f"Config should not have description field when not provided, but got: {config}"
+
+            logger.info("Config correctly created without description field")
+
+    @pytest.mark.cli
     def test_configure_requires_all_options_in_non_interactive(self):
         """
         Test that configure in non-interactive mode requires all options.
@@ -551,6 +861,7 @@ class TestADKAgentsConfigureHelp:
             f"Should show --agent-workspace-name option. Got: {combined_output}"
         assert "--deployment-name" in combined_output, "Should show --deployment-name option"
         assert "--entrypoint-file" in combined_output, "Should show --entrypoint-file option"
+        assert "--description" in combined_output, "Should show --description option"
         assert "--interactive" in combined_output or "--no-interactive" in combined_output, \
             "Should show --interactive option"
 

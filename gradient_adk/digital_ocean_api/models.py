@@ -235,6 +235,9 @@ class AgentDeploymentRelease(BaseModel):
     created_by_user_email: Optional[str] = Field(
         None, description="Email of user that created the agent deployment release"
     )
+    library_version: Optional[str] = Field(
+        None, description="Version of the ADK library used to create this release"
+    )
 
 
 class AgentLoggingConfig(BaseModel):
@@ -438,6 +441,14 @@ class CreateAgentWorkspaceDeploymentInput(BaseModel):
     agent_deployment_code_artifact: AgentDeploymentCodeArtifact = Field(
         ..., description="The agent deployment code artifact"
     )
+    library_version: Optional[str] = Field(
+        None, description="Version of the ADK library used to create this deployment"
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Description of the agent deployment (max 1000 characters)",
+        max_length=1000,
+    )
 
 
 class CreateAgentWorkspaceDeploymentOutput(BaseModel):
@@ -463,6 +474,9 @@ class CreateAgentDeploymentReleaseInput(BaseModel):
     agent_deployment_name: str = Field(..., description="The deployment name")
     agent_deployment_code_artifact: AgentDeploymentCodeArtifact = Field(
         ..., description="The agent deployment code artifact"
+    )
+    library_version: Optional[str] = Field(
+        None, description="Version of the ADK library used to create this release"
     )
 
 
@@ -513,6 +527,14 @@ class CreateAgentWorkspaceInput(BaseModel):
         ..., description="The agent deployment code artifact"
     )
     project_id: str = Field(..., description="The project id")
+    library_version: Optional[str] = Field(
+        None, description="Version of the ADK library used to create this workspace"
+    )
+    description: Optional[str] = Field(
+        None,
+        description="Description of the agent workspace deployment (max 1000 characters)",
+        max_length=1000,
+    )
 
 
 class CreateAgentWorkspaceOutput(BaseModel):

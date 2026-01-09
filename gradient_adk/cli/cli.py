@@ -8,7 +8,10 @@ from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigMan
 from gradient_adk.cli.agent.deployment.deploy_service import AgentDeployService
 from gradient_adk.cli.agent.direct_launch_service import DirectLaunchService
 from gradient_adk.cli.agent.traces_service import GalileoTracesService
-from gradient_adk.cli.agent.evaluation_service import EvaluationService, validate_evaluation_dataset
+from gradient_adk.cli.agent.evaluation_service import (
+    EvaluationService,
+    validate_evaluation_dataset,
+)
 from gradient_adk.cli.agent.env_utils import get_do_api_token, EnvironmentError
 
 
@@ -61,6 +64,7 @@ def _configure_agent(
     agent_name: Optional[str] = None,
     deployment_name: Optional[str] = None,
     entrypoint_file: Optional[str] = None,
+    description: Optional[str] = None,
     interactive: bool = True,
     skip_entrypoint_prompt: bool = False,  # New parameter for init
 ) -> None:
@@ -79,6 +83,7 @@ def _configure_agent(
             agent_name=agent_name,
             agent_environment=deployment_name,
             entrypoint_file=entrypoint_file,
+            description=description,
             interactive=False,
         )
     else:
@@ -87,6 +92,7 @@ def _configure_agent(
             agent_name=agent_name,
             agent_environment=deployment_name,
             entrypoint_file=entrypoint_file,
+            description=description,
             interactive=interactive,
         )
 
@@ -140,6 +146,14 @@ gradient
         env_path.write_text(env_content)
 
 
+# Default description for agents created with `gradient agent init`
+_DEFAULT_INIT_DESCRIPTION = (
+    "Example LangGraph agent. Invoke: curl -X POST <url> "
+    '-H "Authorization: Bearer $DIGITALOCEAN_API_TOKEN" '
+    '-H "Content-Type: application/json" -d \'{"prompt": "hello"}\''
+)
+
+
 @agent_app.command("init")
 def agent_init(
     agent_name: Optional[str] = typer.Option(
@@ -164,6 +178,7 @@ def agent_init(
         agent_name=agent_name,
         deployment_name=deployment_name,
         entrypoint_file=entrypoint_file,
+        description=_DEFAULT_INIT_DESCRIPTION,
         interactive=interactive,
         skip_entrypoint_prompt=True,  # Don't prompt for entrypoint in init
     )
@@ -190,6 +205,11 @@ def agent_configure(
         "--entrypoint-file",
         help="Python file containing @entrypoint decorated function",
     ),
+    description: Optional[str] = typer.Option(
+        None,
+        "--description",
+        help="Description for the agent deployment (max 1000 characters)",
+    ),
     interactive: bool = typer.Option(
         True, "--interactive/--no-interactive", help="Interactive prompt mode"
     ),
@@ -199,6 +219,7 @@ def agent_configure(
         agent_name=agent_name,
         deployment_name=deployment_name,
         entrypoint_file=entrypoint_file,
+        description=description,
         interactive=interactive,
     )
 
@@ -380,6 +401,9 @@ def agent_deploy(
                     )
                     raise typer.Exit(1)
 
+                # Get description from config (optional)
+                description = _agent_config_manager.get_description()
+
                 # Create deploy service with injected client
                 deploy_service = AgentDeployService(client=client)
 
@@ -390,6 +414,7 @@ def agent_deploy(
                     source_dir=Path.cwd(),
                     project_id=project_id,
                     api_token=api_token,
+                    description=description,
                 )
 
                 typer.echo(
@@ -419,6 +444,23 @@ def agent_deploy(
 
         # Get error message with fallback
         error_msg = str(e) if str(e) else repr(e)
+
+        # Check for "feature not enabled" error
+        if "feature not enabled" in error_msg.lower():
+            typer.echo(f"❌ Deployment failed: {error_msg}", err=True)
+            typer.echo(
+                "\nThe Gradient ADK is currently in public preview. To access it, enable it for your team via:",
+                err=True,
+            )
+            typer.echo(
+                "  https://cloud.digitalocean.com/account/feature-preview",
+                err=True,
+            )
+            typer.echo(
+                "\nIt may take up to 5 minutes to take effect.",
+                err=True,
+            )
+            raise typer.Exit(1)
 
         typer.echo(f"❌ Deployment failed: {error_msg}", err=True)
 
@@ -647,14 +689,14 @@ def agent_evaluate(
         def prompt_and_validate_dataset() -> str:
             """Prompt for dataset file path and validate it. Re-prompts on error."""
             nonlocal dataset_file
-            
+
             while True:
                 if dataset_file is None:
                     dataset_file = typer.prompt("Dataset file path")
-                
+
                 dataset_path = Path(dataset_file)
                 is_valid, errors = validate_evaluation_dataset(dataset_path)
-                
+
                 if is_valid:
                     return dataset_file
                 else:
@@ -676,7 +718,7 @@ def agent_evaluate(
 
                 if test_case_name is None:
                     test_case_name = typer.prompt("Evaluation test case name")
-                
+
                 # Validate dataset file immediately when prompting
                 if dataset_file is None or not Path(dataset_file).exists():
                     prompt_and_validate_dataset()

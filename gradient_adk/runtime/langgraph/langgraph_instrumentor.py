@@ -241,13 +241,33 @@ def _had_hits_since(intr, token) -> bool:
 def _get_captured_payloads_with_type(intr, token) -> tuple:
     """Get captured API request/response payloads and classify the call type.
 
+    When using httpx, both request() and send() are intercepted, which can result
+    in two CapturedRequest records for a single HTTP call. The request() interception
+    captures the request payload but not the response (since it delegates to send()),
+    while the send() interception captures both request and response payloads.
+
+    This function searches for a captured request that has a response payload,
+    preferring the last one (which is typically from send()).
+
     Returns:
         (request_payload, response_payload, is_llm, is_retriever)
     """
     try:
         captured = intr.get_captured_requests_since(token)
         if captured:
-            # Use the first captured request (most common case)
+            # Search in reverse order to find a captured request with a response.
+            # This handles the case where both request() and send() are intercepted:
+            # - captured[0] from request(): has request_payload, no response_payload
+            # - captured[1] from send(): has both request_payload and response_payload
+            for call in reversed(captured):
+                if call.response_payload is not None:
+                    url = call.url
+                    is_llm = is_inference_url(url)
+                    is_retriever = is_kbaas_url(url)
+                    return call.request_payload, call.response_payload, is_llm, is_retriever
+
+            # Fallback to the first captured request if none have a response
+            # (e.g., if the HTTP request failed or response wasn't captured)
             call = captured[0]
             url = call.url
             is_llm = is_inference_url(url)
