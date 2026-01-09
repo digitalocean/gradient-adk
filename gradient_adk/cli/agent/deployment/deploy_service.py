@@ -1,10 +1,10 @@
 from __future__ import annotations
 import asyncio
+import importlib.metadata
 import time
 from pathlib import Path
 from typing import Protocol
 
-import gradient_adk
 from gradient_adk.logging import get_logger
 from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
 from gradient_adk.digital_ocean_api.models import (
@@ -24,6 +24,14 @@ from .utils.zip_utils import ZipCreator, DirectoryZipCreator
 from .utils.s3_utils import S3Uploader, HttpxS3Uploader
 
 logger = get_logger(__name__)
+
+
+def _get_adk_version() -> str:
+    """Get the version from package metadata."""
+    try:
+        return importlib.metadata.version("gradient-adk")
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
 
 
 class DeployService(Protocol):
@@ -330,7 +338,7 @@ class AgentDeployService:
                 agent_deployment_name=agent_deployment_name,
                 agent_deployment_code_artifact=code_artifact,
                 project_id=project_id,
-                library_version=gradient_adk.__version__,
+                library_version=_get_adk_version(),
                 description=description,
             )
             workspace_output = await self.client.create_agent_workspace(workspace_input)
@@ -357,7 +365,7 @@ class AgentDeployService:
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
                 agent_deployment_code_artifact=code_artifact,
-                library_version=gradient_adk.__version__,
+                library_version=_get_adk_version(),
                 description=description,
             )
             deployment_output = await self.client.create_agent_workspace_deployment(
@@ -376,7 +384,7 @@ class AgentDeployService:
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
                 agent_deployment_code_artifact=code_artifact,
-                library_version=gradient_adk.__version__,
+                library_version=_get_adk_version(),
             )
             release_output = await self.client.create_agent_deployment_release(
                 release_input
