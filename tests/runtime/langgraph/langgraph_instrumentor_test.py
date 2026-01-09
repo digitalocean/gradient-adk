@@ -570,3 +570,88 @@ def test_get_captured_payloads_with_type_no_captures():
     assert resp is None
     assert is_llm is False
     assert is_retriever is False
+
+
+def test_get_captured_payloads_with_type_double_capture():
+    """Test _get_captured_payloads_with_type handles double-capture from request() and send().
+    
+    When using httpx, both request() and send() are intercepted, creating two
+    CapturedRequest records:
+    - The first (from request()) has request_payload but NO response_payload
+    - The second (from send()) has both request_payload AND response_payload
+    
+    The function should find and return the one with the response.
+    """
+    mock_intr = MagicMock()
+    
+    # First capture from request() - no response
+    mock_captured_1 = MagicMock()
+    mock_captured_1.url = "https://kbaas.do-ai.run/retrieve"
+    mock_captured_1.request_payload = {"query": "test"}
+    mock_captured_1.response_payload = None  # No response captured here
+    
+    # Second capture from send() - has response
+    mock_captured_2 = MagicMock()
+    mock_captured_2.url = "https://kbaas.do-ai.run/retrieve"
+    mock_captured_2.request_payload = {"query": "test"}
+    mock_captured_2.response_payload = {"results": [{"text_content": "result"}]}
+
+    mock_intr.get_captured_requests_since.return_value = [mock_captured_1, mock_captured_2]
+
+    req, resp, is_llm, is_retriever = _get_captured_payloads_with_type(mock_intr, 0)
+
+    # Should return the payload from the second capture (which has the response)
+    assert req == {"query": "test"}
+    assert resp == {"results": [{"text_content": "result"}]}
+    assert is_llm is False
+    assert is_retriever is True
+
+
+def test_get_captured_payloads_with_type_double_capture_fallback():
+    """Test _get_captured_payloads_with_type falls back to first capture if none have response.
+    
+    If for some reason neither capture has a response (e.g., request failed),
+    the function should fall back to the first captured request.
+    """
+    mock_intr = MagicMock()
+    
+    # Both captures have no response
+    mock_captured_1 = MagicMock()
+    mock_captured_1.url = "https://kbaas.do-ai.run/retrieve"
+    mock_captured_1.request_payload = {"query": "test1"}
+    mock_captured_1.response_payload = None
+    
+    mock_captured_2 = MagicMock()
+    mock_captured_2.url = "https://kbaas.do-ai.run/retrieve"
+    mock_captured_2.request_payload = {"query": "test2"}
+    mock_captured_2.response_payload = None
+
+    mock_intr.get_captured_requests_since.return_value = [mock_captured_1, mock_captured_2]
+
+    req, resp, is_llm, is_retriever = _get_captured_payloads_with_type(mock_intr, 0)
+
+    # Should fall back to first capture
+    assert req == {"query": "test1"}
+    assert resp is None
+    assert is_llm is False
+    assert is_retriever is True
+
+
+def test_get_captured_payloads_with_type_single_capture_with_response():
+    """Test _get_captured_payloads_with_type works with single capture that has response."""
+    mock_intr = MagicMock()
+    
+    # Single capture with response (normal case when only send() is triggered)
+    mock_captured = MagicMock()
+    mock_captured.url = "https://inference.do-ai.run/v1/chat"
+    mock_captured.request_payload = {"messages": [{"role": "user", "content": "Hello"}]}
+    mock_captured.response_payload = {"choices": [{"message": {"content": "Hi!"}}]}
+
+    mock_intr.get_captured_requests_since.return_value = [mock_captured]
+
+    req, resp, is_llm, is_retriever = _get_captured_payloads_with_type(mock_intr, 0)
+
+    assert req == {"messages": [{"role": "user", "content": "Hello"}]}
+    assert resp == {"choices": [{"message": {"content": "Hi!"}}]}
+    assert is_llm is True
+    assert is_retriever is False

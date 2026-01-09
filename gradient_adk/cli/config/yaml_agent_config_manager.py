@@ -41,11 +41,16 @@ class YamlAgentConfigManager(AgentConfigManager):
         config = self.load_config()
         return config.get("entrypoint_file") if config else None
 
+    def get_description(self) -> Optional[str]:
+        config = self.load_config()
+        return config.get("description") if config else None
+
     def configure(
         self,
         agent_name: Optional[str] = None,
         agent_environment: Optional[str] = None,
         entrypoint_file: Optional[str] = None,
+        description: Optional[str] = None,
         interactive: bool = True,
     ) -> None:
         """Configure agent settings and save to YAML file."""
@@ -67,6 +72,7 @@ class YamlAgentConfigManager(AgentConfigManager):
                 entrypoint_file = typer.prompt(
                     "Entrypoint file (e.g., main.py, agent.py)", default="main.py"
                 )
+            # Note: description is optional and not prompted for in interactive mode
         else:
             if not all([agent_name, agent_environment, entrypoint_file]):
                 typer.echo(
@@ -92,8 +98,16 @@ class YamlAgentConfigManager(AgentConfigManager):
                 )
                 raise typer.Exit(1)
 
+        # Validate description length if provided
+        if description is not None and len(description) > 1000:
+            typer.echo(
+                f"Error: Description exceeds maximum length of 1000 characters (got {len(description)}).",
+                err=True,
+            )
+            raise typer.Exit(1)
+
         self._validate_entrypoint_file(entrypoint_file)
-        self._save_config(agent_name, agent_environment, entrypoint_file)
+        self._save_config(agent_name, agent_environment, entrypoint_file, description)
 
     def _validate_name(self, name: str) -> bool:
         """Validate that a name only contains alphanumeric characters, hyphens, and underscores."""
@@ -159,7 +173,11 @@ class YamlAgentConfigManager(AgentConfigManager):
         )
 
     def _save_config(
-        self, agent_name: str, agent_environment: str, entrypoint_file: str
+        self,
+        agent_name: str,
+        agent_environment: str,
+        entrypoint_file: str,
+        description: Optional[str] = None,
     ) -> None:
         """Save configuration to YAML file."""
         config = {
@@ -168,6 +186,10 @@ class YamlAgentConfigManager(AgentConfigManager):
             "entrypoint_file": entrypoint_file,
         }
 
+        # Only include description if provided
+        if description is not None:
+            config["description"] = description
+
         try:
             with open(self.config_file, "w") as f:
                 yaml.safe_dump(config, f, default_flow_style=False)
@@ -175,6 +197,8 @@ class YamlAgentConfigManager(AgentConfigManager):
             typer.echo(f"  Agent workspace name: {agent_name}")
             typer.echo(f"  Agent deployment name: {agent_environment}")
             typer.echo(f"  Entrypoint: {entrypoint_file}")
+            if description:
+                typer.echo(f"  Description: {description[:50]}{'...' if len(description) > 50 else ''}")
         except Exception as e:
             typer.echo(f"Error writing configuration file: {e}", err=True)
             raise typer.Exit(1)

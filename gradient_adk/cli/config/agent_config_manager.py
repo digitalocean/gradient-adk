@@ -17,11 +17,15 @@ class AgentConfigManager:
     def get_entrypoint_file(self) -> Optional[str]:
         raise NotImplementedError
 
+    def get_description(self) -> Optional[str]:
+        raise NotImplementedError
+
     def configure(
         self,
         agent_name: Optional[str] = None,
         agent_environment: Optional[str] = None,
         entrypoint_file: Optional[str] = None,
+        description: Optional[str] = None,
         interactive: bool = True,
     ) -> None:
         raise NotImplementedError
