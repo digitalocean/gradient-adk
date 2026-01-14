@@ -6,7 +6,7 @@ import os
 from typing import Dict, TypedDict
 
 from gradient import AsyncGradient
-from gradient_adk import entrypoint
+from gradient_adk import entrypoint, RequestContext
 from langgraph.graph import StateGraph
 
 
@@ -44,7 +44,7 @@ async def llm_call(state: State) -> State:
 
 
 @entrypoint
-async def main(input: Dict, context: Dict):
+async def main(input: Dict, context: RequestContext):
     """Entrypoint"""
 
     # Setup the graph

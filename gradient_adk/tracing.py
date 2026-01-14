@@ -4,7 +4,7 @@ These decorators allow developers to instrument their custom agent functions
 with the same kind of tracing automatically provided for some other frameworks.
 
 Example usage:
-    from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever
+    from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever, RequestContext
 
     @trace_retriever("fetch_data")
     async def fetch_data(query: str) -> dict:
@@ -22,7 +22,7 @@ Example usage:
         return x + y
 
     @entrypoint
-    async def my_agent(input: dict, context: dict):
+    async def my_agent(input: dict, context: RequestContext):
         data = await fetch_data(input["query"])
         result = await calculate(5, 10)
         response = await call_model(data["prompt"])
@@ -240,7 +240,9 @@ def _trace_base(
                             if span_type is None and has_network_hits:
                                 meta["is_llm_call"] = True
                             # Get captured request/response payloads for LLM metadata extraction
-                            captured = interceptor.get_captured_requests_since(network_token)
+                            captured = interceptor.get_captured_requests_since(
+                                network_token
+                            )
                             if captured:
                                 call = captured[0]
                                 if call.request_payload:
@@ -302,7 +304,9 @@ def _trace_base(
                             if span_type is None and has_network_hits:
                                 meta["is_llm_call"] = True
                             # Get captured request/response payloads for LLM metadata extraction
-                            captured = interceptor.get_captured_requests_since(network_token)
+                            captured = interceptor.get_captured_requests_since(
+                                network_token
+                            )
                             if captured:
                                 call = captured[0]
                                 if call.request_payload:
@@ -401,7 +405,9 @@ def _trace_base(
                             if span_type is None and has_network_hits:
                                 meta["is_llm_call"] = True
                             # Get captured request/response payloads for LLM metadata extraction
-                            captured = interceptor.get_captured_requests_since(network_token)
+                            captured = interceptor.get_captured_requests_since(
+                                network_token
+                            )
                             if captured:
                                 call = captured[0]
                                 if call.request_payload:
@@ -536,7 +542,9 @@ def add_llm_span(
     span = _create_span(name, _freeze(input))
     meta = _ensure_meta(span)
     meta["is_llm_call"] = True
-    meta["is_programmatic"] = True  # Mark as programmatic to skip auto-duration calculation
+    meta["is_programmatic"] = (
+        True  # Mark as programmatic to skip auto-duration calculation
+    )
 
     if model is not None:
         meta["model_name"] = model
@@ -548,7 +556,11 @@ def add_llm_span(
         meta["llm_request_payload"]["temperature"] = temperature
     if time_to_first_token_ns is not None:
         meta["time_to_first_token_ns"] = time_to_first_token_ns
-    if num_input_tokens is not None or num_output_tokens is not None or total_tokens is not None:
+    if (
+        num_input_tokens is not None
+        or num_output_tokens is not None
+        or total_tokens is not None
+    ):
         if "llm_response_payload" not in meta:
             meta["llm_response_payload"] = {}
         meta["llm_response_payload"]["usage"] = {
@@ -608,7 +620,9 @@ def add_tool_span(
     span = _create_span(name, _freeze(input))
     meta = _ensure_meta(span)
     meta["is_tool_call"] = True
-    meta["is_programmatic"] = True  # Mark as programmatic to skip auto-duration calculation
+    meta["is_programmatic"] = (
+        True  # Mark as programmatic to skip auto-duration calculation
+    )
 
     if tool_call_id is not None:
         meta["tool_call_id"] = tool_call_id
@@ -662,7 +676,9 @@ def add_agent_span(
     span = _create_span(name, _freeze(input))
     meta = _ensure_meta(span)
     meta["is_agent_call"] = True
-    meta["is_programmatic"] = True  # Mark as programmatic to skip auto-duration calculation
+    meta["is_programmatic"] = (
+        True  # Mark as programmatic to skip auto-duration calculation
+    )
 
     if tags is not None:
         meta["tags"] = tags
