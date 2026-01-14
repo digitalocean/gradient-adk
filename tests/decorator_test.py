@@ -535,10 +535,43 @@ def test_request_context_dataclass():
     # Default values
     ctx = RequestContext()
     assert ctx.session_id is None
+    assert ctx.headers == {}
 
     # With session_id
     ctx = RequestContext(session_id="test-session-123")
     assert ctx.session_id == "test-session-123"
+
+
+def test_context_headers_contains_request_headers(patch_helpers):
+    """Test that context.headers captures incoming headers."""
+    tracker = patch_helpers
+    captured_headers = {}
+
+    @entrypoint
+    def handler(data, context):
+        captured_headers.update(context.headers)
+        return {"headers": context.headers}
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post(
+            "/run",
+            json={"test": 1},
+            headers={
+                "Session-Id": "my-session-abc",
+                "X-Request-Id": "req-123",
+                "X-Custom": "custom",
+            },
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["headers"]["session-id"] == "my-session-abc"
+        assert body["headers"]["x-request-id"] == "req-123"
+        assert body["headers"]["x-custom"] == "custom"
+
+    assert captured_headers["session-id"] == "my-session-abc"
+    assert captured_headers["x-request-id"] == "req-123"
+    assert captured_headers["x-custom"] == "custom"
 
 
 def test_session_id_header_passed_to_context_sync(patch_helpers):

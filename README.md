@@ -11,12 +11,14 @@ The Gradient™ Agent Development Kit (ADK) is a comprehensive toolkit for build
 ## Features
 
 ### 🛠️ CLI (Command Line Interface)
+
 - **Local Development**: Run and test your agents locally with hot-reload support
 - **Seamless Deployment**: Deploy agents to DigitalOcean with a single command
 - **Evaluation Framework**: Run comprehensive evaluations with custom metrics and datasets
 - **Observability**: View traces and runtime logs directly from the CLI
 
 ### 🚀 Runtime Environment
+
 - **Framework Agnostic**: Works with any Python framework for building AI agents
 - **Automatic LangGraph Integration**: Built-in trace capture for LangGraph nodes and state transitions
 - **Custom Decorators**: Capture traces from any framework using `@trace` decorators
@@ -40,6 +42,7 @@ gradient agent init
 ```
 
 This creates a new agent project with:
+
 - `main.py` - Agent entrypoint with example code
 - `agents/` - Directory for agent implementations
 - `tools/` - Directory for custom tools
@@ -77,7 +80,7 @@ gradient agent evaluate \
 LangGraph agents automatically capture traces for all nodes and state transitions:
 
 ```python
-from gradient_adk import entrypoint
+from gradient_adk import entrypoint, RequestContext
 from langgraph.graph import StateGraph
 from typing import TypedDict
 
@@ -92,11 +95,11 @@ async def llm_call(state: State) -> State:
     return state
 
 @entrypoint
-async def main(input: dict, context: dict):
+async def main(input: dict, context: RequestContext):
     graph = StateGraph(State)
     graph.add_node("llm_call", llm_call)
     graph.set_entry_point("llm_call")
-    
+
     graph = graph.compile()
     result = await graph.ainvoke({"input": input.get("query")})
     return result["output"]
@@ -107,7 +110,7 @@ async def main(input: dict, context: dict):
 For frameworks beyond LangGraph, use trace decorators to capture custom spans:
 
 ```python
-from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever
+from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever, RequestContext
 
 @trace_retriever("vector_search")
 async def search_knowledge_base(query: str):
@@ -127,7 +130,7 @@ async def calculate(x: int, y: int):
     return x + y
 
 @entrypoint
-async def main(input: dict, context: dict):
+async def main(input: dict, context: RequestContext):
     docs = await search_knowledge_base(input["query"])
     result = await calculate(5, 10)
     response = await generate_response(f"Context: {docs}")
@@ -139,10 +142,10 @@ async def main(input: dict, context: dict):
 The runtime supports streaming responses with automatic trace capture:
 
 ```python
-from gradient_adk import entrypoint
+from gradient_adk import entrypoint, RequestContext
 
 @entrypoint
-async def main(input: dict, context: dict):
+async def main(input: dict, context: RequestContext):
     # Stream text chunks
     async def generate_chunks():
         async for chunk in llm.stream(input["query"]):
@@ -190,12 +193,12 @@ gradient agent evaluate \
   --success-threshold 80.0
 ```
 
-
 ## Tracing
 
 The ADK provides comprehensive tracing capabilities to capture and analyze your agent's execution. You can use **decorators** for wrapping functions or **programmatic functions** for manual span creation.
 
 ### What Gets Traced Automatically
+
 - **LangGraph Nodes**: All node executions, state transitions, and edges (including LLM calls, tool calls, and DigitalOcean Knowledge Base calls)
 - **HTTP Requests**: Request/response payloads for LLM API calls
 - **Errors**: Full exception details and stack traces
@@ -206,7 +209,7 @@ The ADK provides comprehensive tracing capabilities to capture and analyze your 
 Use decorators to automatically trace function executions:
 
 ```python
-from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever
+from gradient_adk import entrypoint, trace_llm, trace_tool, trace_retriever, RequestContext
 
 @trace_llm("model_call")
 async def call_model(prompt: str):
@@ -226,7 +229,7 @@ async def search_docs(query: str):
     return results
 
 @entrypoint
-async def main(input: dict, context: dict):
+async def main(input: dict, context: RequestContext):
     docs = await search_docs(input["query"])
     result = await calculate(5, 10)
     response = await call_model(f"Context: {docs}")
@@ -238,10 +241,10 @@ async def main(input: dict, context: dict):
 For more control over span creation, use the programmatic functions. These are useful when you can't use decorators or need to add spans for code you don't control:
 
 ```python
-from gradient_adk import entrypoint, add_llm_span, add_tool_span, add_agent_span
+from gradient_adk import entrypoint, add_llm_span, add_tool_span, add_agent_span, RequestContext
 
 @entrypoint
-async def main(input: dict, context: dict):
+async def main(input: dict, context: RequestContext):
     # Add an LLM span with detailed metadata
     response = await external_llm_call(input["query"])
     add_llm_span(
@@ -279,17 +282,18 @@ async def main(input: dict, context: dict):
 
 #### Available Span Functions
 
-| Function | Description | Key Optional Fields |
-|----------|-------------|---------------------|
-| `add_llm_span()` | Record LLM/model calls | `model`, `temperature`, `num_input_tokens`, `num_output_tokens`, `total_tokens`, `tools`, `time_to_first_token_ns` |
-| `add_tool_span()` | Record tool/function executions | `tool_call_id` |
-| `add_agent_span()` | Record agent/sub-agent executions | — |
+| Function           | Description                       | Key Optional Fields                                                                                                |
+| ------------------ | --------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `add_llm_span()`   | Record LLM/model calls            | `model`, `temperature`, `num_input_tokens`, `num_output_tokens`, `total_tokens`, `tools`, `time_to_first_token_ns` |
+| `add_tool_span()`  | Record tool/function executions   | `tool_call_id`                                                                                                     |
+| `add_agent_span()` | Record agent/sub-agent executions | —                                                                                                                  |
 
 **Common optional fields for all span functions:** `duration_ns`, `metadata`, `tags`, `status_code`
 
 ### Viewing Traces
 
 Traces are:
+
 - Automatically sent to DigitalOcean's Gradient Platform
 - Available in real-time through the web console
 - Accessible via `gradient agent traces` command

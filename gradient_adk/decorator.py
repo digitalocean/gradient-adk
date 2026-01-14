@@ -8,7 +8,7 @@ with automatic support for both regular and streaming responses.
 from __future__ import annotations
 import inspect
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Optional, Any, Dict, List
 
 
@@ -18,9 +18,18 @@ class RequestContext:
 
     Attributes:
         session_id: The session ID for the request, if provided.
+        headers: Raw request headers as a dictionary.
     """
 
     session_id: Optional[str] = None
+    headers: Dict[str, str] = field(default_factory=dict)
+
+
+def _build_request_context(req: Request) -> RequestContext:
+    return RequestContext(
+        session_id=req.headers.get("session-id"),
+        headers=dict(req.headers.items()),
+    )
 
 
 from fastapi import FastAPI, HTTPException, Request
@@ -157,9 +166,8 @@ def entrypoint(func: Callable) -> Callable:
 
         is_evaluation = "evaluation-id" in req.headers
 
-        # Extract session ID from headers
-        session_id = req.headers.get("session-id")
-        context = RequestContext(session_id=session_id)
+        context = _build_request_context(req)
+        session_id = context.session_id
 
         # Initialize tracker
         tr = None
@@ -230,7 +238,9 @@ def entrypoint(func: Callable) -> Callable:
                             await tr._submit()
                         except Exception:
                             pass
-                    logger.error("Error in streaming evaluation", error=str(e), exc_info=True)
+                    logger.error(
+                        "Error in streaming evaluation", error=str(e), exc_info=True
+                    )
                     raise HTTPException(status_code=500, detail="Internal server error")
 
             # Normal streaming case - wrap in tracking iterator
