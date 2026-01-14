@@ -527,6 +527,55 @@ def main(query, context):
             cleanup_process(process)
 
     @pytest.mark.cli
+    def test_agent_run_headers_passthrough(self, setup_agent_in_temp):
+        """
+        Test that arbitrary headers are passed through to RequestContext.headers.
+        """
+        logger = logging.getLogger(__name__)
+        temp_dir = setup_agent_in_temp
+        port = find_free_port()
+        process = None
+
+        try:
+            logger.info(f"Starting agent on port {port} in {temp_dir}")
+
+            process = subprocess.Popen(
+                [
+                    "gradient",
+                    "agent",
+                    "run",
+                    "--port",
+                    str(port),
+                    "--no-dev",
+                ],
+                cwd=temp_dir,
+                start_new_session=True,
+            )
+
+            server_ready = wait_for_server(port, timeout=30)
+            assert server_ready, "Server did not start within timeout"
+
+            headers = {
+                "Session-Id": "session-headers-123",
+                "X-Request-Id": "req-789",
+                "X-Custom": "custom-value",
+            }
+            response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello headers"},
+                headers=headers,
+                timeout=10,
+            )
+            assert response.status_code == 200
+            data = response.json()
+            lowered = {k.lower(): v for k, v in data["headers"].items()}
+            assert lowered["session-id"] == "session-headers-123"
+            assert lowered["x-request-id"] == "req-789"
+            assert lowered["x-custom"] == "custom-value"
+        finally:
+            cleanup_process(process)
+
+    @pytest.mark.cli
     def test_streaming_agent_without_evaluation_id_streams_response(
         self, setup_streaming_agent_in_temp
     ):

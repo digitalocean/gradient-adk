@@ -14,4 +14,5 @@ async def main(query, context: RequestContext):
         "echo": prompt,
         "received": query,
         "session_id": context.session_id if context else None,
+        "headers": context.headers if context else {},
     }
