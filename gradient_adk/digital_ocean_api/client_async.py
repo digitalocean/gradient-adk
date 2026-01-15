@@ -39,6 +39,7 @@ from .models import (
     CreateEvaluationDatasetFileUploadPresignedUrlsOutput,
     GetEvaluationRunOutput,
     ListEvaluationMetricsOutput,
+    DeleteAgentWorkspaceOutput,
 )
 from .errors import (
     DOAPIAuthError,
@@ -509,6 +510,28 @@ class AsyncDigitalOceanGenAI:
         data = await self._get_json(path)
         return ListEvaluationMetricsOutput(**data)
 
+    async def delete_agent_workspace(
+        self, agent_workspace_name: str
+    ) -> DeleteAgentWorkspaceOutput:
+        """Delete an agent workspace by name.
+
+        Args:
+            agent_workspace_name: The name of the agent workspace to delete
+
+        Returns:
+            DeleteAgentWorkspaceOutput containing the name of the deleted workspace
+        """
+        logger.debug(
+            "Deleting agent workspace",
+            agent_workspace_name=agent_workspace_name,
+        )
+        path = f"/gen-ai/agent-workspaces/{agent_workspace_name}"
+        data = await self._delete_json(path)
+        # If API returns empty response, construct output manually
+        if data is None:
+            return DeleteAgentWorkspaceOutput(agent_workspace_name=agent_workspace_name)
+        return DeleteAgentWorkspaceOutput(**data)
+
     @staticmethod
     def _model_dump(model: BaseModel) -> dict:
         try:
@@ -648,6 +671,63 @@ class AsyncDigitalOceanGenAI:
                 last_exc = e
                 if attempt > self.max_retries:
                     raise DOAPINetworkError(f"Network error on PUT {path}: {e}") from e
+                await async_backoff_sleep(attempt)
+                continue
+
+            status = resp.status_code
+            text = resp.text or ""
+            payload = None
+            try:
+                if text.strip():
+                    payload = resp.json()
+            except json.JSONDecodeError:
+                payload = None
+
+            if 200 <= status < 300:
+                return payload
+
+            # Retryable?
+            if status in self.retry_statuses and attempt < self.max_retries:
+                retry_after_s = None
+                ra = resp.headers.get("Retry-After")
+                if ra:
+                    try:
+                        retry_after_s = float(ra)
+                    except ValueError:
+                        retry_after_s = None
+                await async_backoff_sleep(attempt, retry_after=retry_after_s)
+                continue
+
+            # Non-retryable or out of retries, raise typed errors
+            message = self._extract_error_message(payload) or f"HTTP {status}"
+            if status in (401, 403):
+                raise DOAPIAuthError(message, status_code=status, payload=payload)
+            if status == 429:
+                raise DOAPIRateLimitError(message, status_code=status, payload=payload)
+            if 400 <= status < 500:
+                raise DOAPIClientError(message, status_code=status, payload=payload)
+            if 500 <= status < 600:
+                raise DOAPIServerError(message, status_code=status, payload=payload)
+
+            raise DOAPIError(message, status_code=status, payload=payload)
+
+    async def _delete_json(self, path: str) -> Optional[dict]:
+        attempt = 0
+        last_exc: Exception | None = None
+
+        while True:
+            attempt += 1
+            try:
+                resp = await self._client.delete(path)
+            except (
+                httpx.ConnectError,
+                httpx.ReadError,
+                httpx.WriteError,
+                httpx.TimeoutException,
+            ) as e:
+                last_exc = e
+                if attempt > self.max_retries:
+                    raise DOAPINetworkError(f"Network error on DELETE {path}: {e}") from e
                 await async_backoff_sleep(attempt)
                 continue
 

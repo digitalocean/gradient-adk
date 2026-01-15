@@ -59,6 +59,7 @@ class AgentDeployService:
         s3_uploader: S3Uploader | None = None,
         polling_interval_sec: float = 10.0,
         max_polling_time_sec: float = 600.0,  # 10 minutes
+        quiet: bool = False,
     ):
         """Initialize the deploy service.
 
@@ -68,12 +69,14 @@ class AgentDeployService:
             s3_uploader: S3 uploader for uploading files (defaults to HttpxS3Uploader)
             polling_interval_sec: How often to poll for release status
             max_polling_time_sec: Maximum time to wait for deployment
+            quiet: If True, suppress progress output (for JSON output mode)
         """
         self.client = client
         self.zip_creator = zip_creator or DirectoryZipCreator()
         self.s3_uploader = s3_uploader or HttpxS3Uploader()
         self.polling_interval_sec = polling_interval_sec
         self.max_polling_time_sec = max_polling_time_sec
+        self.quiet = quiet
 
     async def deploy_agent(
         self,
@@ -109,9 +112,8 @@ class AgentDeployService:
             ValueError: If source directory doesn't exist
             Exception: If deployment fails
         """
-        print(
-            "Starting agent deployment...",
-        )
+        if not self.quiet:
+            print("Starting agent deployment...")
 
         #: Check if workspace and deployment exist
         workspace_exists, deployment_exists = await self._check_existing_resources(
@@ -192,15 +194,17 @@ class AgentDeployService:
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
             )
-            logger.info(
-                f"Deployment '{agent_deployment_name}' exists - will create new release"
-            )
+            if not self.quiet:
+                logger.info(
+                    f"Deployment '{agent_deployment_name}' exists - will create new release"
+                )
             return True, True
         except DOAPIClientError as e:
             if e.status_code == 404:
-                logger.info(
-                    f"Deployment '{agent_deployment_name}' does not exist - will create new"
-                )
+                if not self.quiet:
+                    logger.info(
+                        f"Deployment '{agent_deployment_name}' does not exist - will create new"
+                    )
                 return True, False
             raise
 
@@ -401,10 +405,9 @@ class AgentDeployService:
         Raises:
             Exception: If deployment fails or times out
         """
-        import sys
-
-        print(f"Monitoring deployment progress (UUID: {release_uuid})...")
-        print()  # Add blank line for better formatting
+        if not self.quiet:
+            print(f"Monitoring deployment progress (UUID: {release_uuid})...")
+            print()  # Add blank line for better formatting
 
         start_time = time.time()
         last_status = None
@@ -442,7 +445,8 @@ class AgentDeployService:
 
             # Check timeout
             if elapsed > self.max_polling_time_sec:
-                print("\r" + " " * 80 + "\r", end="")  # Clear line
+                if not self.quiet:
+                    print("\r" + " " * 80 + "\r", end="")  # Clear line
                 raise Exception(
                     f"Deployment timed out after {self.max_polling_time_sec}s"
                 )
@@ -461,7 +465,8 @@ class AgentDeployService:
 
                 # Log status changes (clear line first to avoid glitches)
                 if current_status != last_status:
-                    print("\r" + " " * 80 + "\r", end="", flush=True)  # Clear line
+                    if not self.quiet:
+                        print("\r" + " " * 80 + "\r", end="", flush=True)  # Clear line
                     logger.debug(
                         f"Release status changed to: {current_status.value if hasattr(current_status, 'value') else current_status}"
                     )
@@ -471,41 +476,44 @@ class AgentDeployService:
 
                 # Check terminal states
                 if current_status == ReleaseStatus.RELEASE_STATUS_RUNNING:
-                    print("\r" + " " * 80 + "\r", end="")  # Clear line
-                    print(
-                        f"✅ Deployment completed successfully! [{format_elapsed(elapsed)}]"
-                    )
+                    if not self.quiet:
+                        print("\r" + " " * 80 + "\r", end="")  # Clear line
+                        print(
+                            f"✅ Deployment completed successfully! [{format_elapsed(elapsed)}]"
+                        )
                     return
 
                 if current_status == ReleaseStatus.RELEASE_STATUS_FAILED:
-                    print("\r" + " " * 80 + "\r", end="")  # Clear line
+                    if not self.quiet:
+                        print("\r" + " " * 80 + "\r", end="")  # Clear line
                     error_msg = release.error_msg or "Unknown error"
                     raise Exception(
                         f"Deployment failed due to release status being failed: {error_msg}"
                     )
 
-            # Update spinner and display (every iteration for smooth animation)
-            if current_status:
-                emoji, message = status_display.get(
-                    current_status,
-                    (
-                        "⚙️",
+            # Update spinner and display (every iteration for smooth animation) - only in non-quiet mode
+            if not self.quiet:
+                if current_status:
+                    emoji, message = status_display.get(
+                        current_status,
                         (
-                            current_status.value
-                            if hasattr(current_status, "value")
-                            else str(current_status)
+                            "⚙️",
+                            (
+                                current_status.value
+                                if hasattr(current_status, "value")
+                                else str(current_status)
+                            ),
                         ),
-                    ),
-                )
-            else:
-                emoji, message = ("⚙️", "Starting")
+                    )
+                else:
+                    emoji, message = ("⚙️", "Starting")
 
-            spinner = spinner_chars[spinner_index % len(spinner_chars)]
-            elapsed_str = format_elapsed(elapsed)
+                spinner = spinner_chars[spinner_index % len(spinner_chars)]
+                elapsed_str = format_elapsed(elapsed)
 
-            # Print status line with spinner
-            status_line = f"{spinner} {emoji} {message}... [{elapsed_str}]"
-            print(f"\r{status_line}", end="", flush=True)
+                # Print status line with spinner
+                status_line = f"{spinner} {emoji} {message}... [{elapsed_str}]"
+                print(f"\r{status_line}", end="", flush=True)
 
             spinner_index += 1
 
