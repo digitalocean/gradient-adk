@@ -539,5 +539,173 @@ class TestADKAgentsDeployHelp:
         assert "--api-token" in combined_output, f"Should show --api-token option. Got: {combined_output}"
         assert "--verbose" in combined_output or "-v" in combined_output, "Should show --verbose option"
         assert "--skip-validation" in combined_output, "Should show --skip-validation option"
+        assert "--output" in combined_output or "-o" in combined_output, "Should show --output option"
 
         logger.info("Help output is correct")
+
+
+class TestADKAgentsDeployJsonOutput:
+    """Tests for deploy command JSON output mode."""
+
+    @pytest.fixture
+    def echo_agent_dir(self):
+        """Get the path to the echo agent directory."""
+        return Path(__file__).parent.parent / "example_agents" / "echo_agent"
+
+    @pytest.fixture
+    def setup_valid_agent(self, echo_agent_dir):
+        """
+        Setup a temporary directory with a valid agent structure.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Copy the echo agent main.py
+            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+            # Create .gradient directory and config
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+
+            config = {
+                "agent_name": "test-echo-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+
+            with open(gradient_dir / "agent.yml", "w") as f:
+                yaml.safe_dump(config, f)
+
+            # Create requirements.txt
+            requirements_path = temp_path / "requirements.txt"
+            requirements_path.write_text("gradient-adk\n")
+
+            yield temp_path
+
+    @pytest.mark.cli
+    def test_deploy_json_output_missing_config(self):
+        """
+        Test that deploy with --output json returns valid JSON error when config is missing.
+        """
+        import json
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Create a minimal main.py
+            main_py = temp_path / "main.py"
+            main_py.write_text("""
+from gradient_adk import entrypoint
+
+@entrypoint
+async def main(query, context):
+    return {"result": "test"}
+""")
+
+            # Create requirements.txt
+            requirements_path = temp_path / "requirements.txt"
+            requirements_path.write_text("gradient-adk\n")
+
+            # Don't create .gradient/agent.yml
+
+            logger.info(f"Testing deploy --output json without config in {temp_dir}")
+
+            result = subprocess.run(
+                ["gradient", "agent", "deploy", "--output", "json", "--skip-validation"],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+            )
+
+            assert result.returncode != 0, "Deploy should have failed without config"
+
+            # stderr should contain valid JSON error
+            try:
+                parsed = json.loads(result.stderr)
+                assert parsed["status"] == "error", "JSON should have status: error"
+                assert "error" in parsed, "JSON should have error field"
+                assert "configuration" in parsed["error"].lower(), \
+                    f"Error should mention configuration, got: {parsed['error']}"
+                logger.info("JSON error output is valid")
+            except json.JSONDecodeError as e:
+                pytest.fail(f"stderr should be valid JSON, got: {result.stderr}")
+
+    @pytest.mark.cli
+    def test_deploy_json_output_invalid_agent_name(self, setup_valid_agent):
+        """
+        Test that deploy with --output json returns valid JSON error for invalid agent name.
+        """
+        import json
+        logger = logging.getLogger(__name__)
+        temp_path = setup_valid_agent
+
+        # Update config with invalid agent name
+        config_path = temp_path / ".gradient" / "agent.yml"
+        config = {
+            "agent_name": "test agent with spaces!",  # Invalid
+            "agent_environment": "main",
+            "entrypoint_file": "main.py",
+        }
+        with open(config_path, "w") as f:
+            yaml.safe_dump(config, f)
+
+        logger.info(f"Testing deploy --output json with invalid agent name in {temp_path}")
+
+        result = subprocess.run(
+            ["gradient", "agent", "deploy", "--output", "json", "--skip-validation"],
+            cwd=temp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+        )
+
+        assert result.returncode != 0, "Deploy should have failed with invalid agent name"
+
+        # stderr should contain valid JSON error
+        try:
+            parsed = json.loads(result.stderr)
+            assert parsed["status"] == "error", "JSON should have status: error"
+            assert "invalid" in parsed["error"].lower(), \
+                f"Error should mention invalid, got: {parsed['error']}"
+            logger.info("JSON error output is valid for invalid agent name")
+        except json.JSONDecodeError as e:
+            pytest.fail(f"stderr should be valid JSON, got: {result.stderr}")
+
+    @pytest.mark.cli
+    def test_deploy_json_output_missing_api_token(self, setup_valid_agent):
+        """
+        Test that deploy with --output json returns valid JSON error when API token is missing.
+        """
+        import json
+        logger = logging.getLogger(__name__)
+        temp_path = setup_valid_agent
+
+        logger.info(f"Testing deploy --output json without API token in {temp_path}")
+
+        # Create a clean environment without the API token
+        clean_env = {k: v for k, v in os.environ.items() if k != "DIGITALOCEAN_API_TOKEN"}
+
+        result = subprocess.run(
+            ["gradient", "agent", "deploy", "--output", "json", "--skip-validation"],
+            cwd=temp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env=clean_env,
+        )
+
+        assert result.returncode != 0, "Deploy should have failed without API token"
+
+        # stderr should contain valid JSON error
+        try:
+            parsed = json.loads(result.stderr)
+            assert parsed["status"] == "error", "JSON should have status: error"
+            assert "token" in parsed["error"].lower(), \
+                f"Error should mention token, got: {parsed['error']}"
+            logger.info("JSON error output is valid for missing API token")
+        except json.JSONDecodeError as e:
+            pytest.fail(f"stderr should be valid JSON, got: {result.stderr}")

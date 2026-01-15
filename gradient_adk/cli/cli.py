@@ -1,5 +1,8 @@
 from __future__ import annotations
+import json
 import os
+import sys
+from enum import Enum
 from typing import Optional
 import typer
 import importlib.metadata
@@ -13,6 +16,36 @@ from gradient_adk.cli.agent.evaluation_service import (
     validate_evaluation_dataset,
 )
 from gradient_adk.cli.agent.env_utils import get_do_api_token, EnvironmentError
+
+
+class OutputFormat(str, Enum):
+    """Output format options for CLI commands."""
+
+    TEXT = "text"
+    JSON = "json"
+
+
+def output_json(data: dict, file=None) -> None:
+    """Output data as JSON.
+
+    Args:
+        data: Dictionary to output as JSON
+        file: File to write to (defaults to stdout)
+    """
+    if file is None:
+        file = sys.stdout
+    print(json.dumps(data, indent=2, default=str), file=file)
+
+
+def output_json_error(error_message: str, exit_code: int = 1) -> None:
+    """Output an error as JSON to stderr and exit.
+
+    Args:
+        error_message: The error message
+        exit_code: Exit code to use
+    """
+    output_json({"status": "error", "error": error_message}, file=sys.stderr)
+    raise typer.Exit(exit_code)
 
 
 def get_version() -> str:
@@ -276,9 +309,16 @@ def agent_deploy(
         "--skip-validation",
         help="Skip pre-deployment validation (not recommended)",
     ),
+    output: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--output",
+        "-o",
+        help="Output format (text or json)",
+    ),
 ):
     """Deploy the agent to DigitalOcean."""
     import asyncio
+    import re
     from pathlib import Path
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
     from gradient_adk.cli.agent.deployment.validation import (
@@ -286,10 +326,10 @@ def agent_deploy(
         ValidationError,
     )
 
-    # Set verbose mode globally if requested
-    if verbose:
-        import os
+    json_output = output == OutputFormat.JSON
 
+    # Set verbose mode globally if requested (only in text mode)
+    if verbose and not json_output:
         os.environ["GRADIENT_VERBOSE"] = "1"
         # Configure logging with verbose mode
         from gradient_adk.logging import configure_logging
@@ -308,6 +348,8 @@ def agent_deploy(
 
         # Check if configuration exists
         if not agent_workspace_name or not agent_deployment_name or not entrypoint_file:
+            if json_output:
+                output_json_error("Agent configuration not found. No .gradient/agent.yml configuration file found in the current directory.")
             typer.echo("❌ Agent configuration not found.", err=True)
             typer.echo(
                 "\nNo .gradient/agent.yml configuration file found in the current directory.",
@@ -320,9 +362,10 @@ def agent_deploy(
             raise typer.Exit(1)
 
         # Validate names follow requirements (alphanumeric, hyphens, underscores only)
-        import re
-
         if not re.match(r"^[a-zA-Z0-9_-]+$", agent_workspace_name):
+            error_msg = f"Invalid agent workspace name: '{agent_workspace_name}'. Agent workspace name can only contain alphanumeric characters, hyphens, and underscores."
+            if json_output:
+                output_json_error(error_msg)
             typer.echo(
                 f"❌ Invalid agent workspace name: '{agent_workspace_name}'", err=True
             )
@@ -333,6 +376,9 @@ def agent_deploy(
             raise typer.Exit(1)
 
         if not re.match(r"^[a-zA-Z0-9_-]+$", agent_deployment_name):
+            error_msg = f"Invalid deployment name: '{agent_deployment_name}'. Deployment name can only contain alphanumeric characters, hyphens, and underscores."
+            if json_output:
+                output_json_error(error_msg)
             typer.echo(
                 f"❌ Invalid deployment name: '{agent_deployment_name}'", err=True
             )
@@ -348,9 +394,12 @@ def agent_deploy(
                 validate_agent_entrypoint(
                     source_dir=Path.cwd(),
                     entrypoint_file=entrypoint_file,
-                    verbose=verbose,
+                    verbose=verbose and not json_output,
                 )
             except ValidationError as e:
+                error_msg = f"Validation failed: {e}"
+                if json_output:
+                    output_json_error(error_msg)
                 typer.echo(f"❌ Validation failed:\n{e}", err=True)
                 typer.echo(
                     "\nFix the issues above and try again, or use --skip-validation to bypass (not recommended).",
@@ -358,17 +407,24 @@ def agent_deploy(
                 )
                 raise typer.Exit(1)
         else:
-            typer.echo(
-                "⚠️  Skipping validation - deployment may fail if agent has issues"
-            )
-            typer.echo()
+            if not json_output:
+                typer.echo(
+                    "⚠️  Skipping validation - deployment may fail if agent has issues"
+                )
+                typer.echo()
 
         # Get API token
         if not api_token:
-            api_token = get_do_api_token()
+            try:
+                api_token = get_do_api_token()
+            except EnvironmentError as e:
+                if json_output:
+                    output_json_error(str(e))
+                raise
 
-        typer.echo(f"🚀 Deploying {agent_workspace_name}/{agent_deployment_name}...")
-        typer.echo()
+        if not json_output:
+            typer.echo(f"🚀 Deploying {agent_workspace_name}/{agent_deployment_name}...")
+            typer.echo()
 
         # Get project ID from default project
         async def deploy():
@@ -383,6 +439,9 @@ def agent_deploy(
                     project_response = await client.get_default_project()
                     project_id = project_response.project.id
                 except (DOAPIClientError, DOAPIAuthError) as e:
+                    error_msg = "Failed to retrieve default project from DigitalOcean API. Your API token must have projects:read (or projects:*) and genai:* scopes."
+                    if json_output:
+                        output_json_error(error_msg)
                     typer.echo(
                         "❌ Failed to retrieve default project from DigitalOcean API",
                         err=True,
@@ -405,7 +464,7 @@ def agent_deploy(
                 description = _agent_config_manager.get_description()
 
                 # Create deploy service with injected client
-                deploy_service = AgentDeployService(client=client)
+                deploy_service = AgentDeployService(client=client, quiet=json_output)
 
                 # Deploy from current directory
                 workspace_uuid = await deploy_service.deploy_agent(
@@ -417,36 +476,50 @@ def agent_deploy(
                     description=description,
                 )
 
-                typer.echo(
-                    f"Agent deployed successfully! ({agent_workspace_name}/{agent_deployment_name})"
-                )
                 invoke_url = f"https://agents.do-ai.run/{workspace_uuid}/{agent_deployment_name}/run"
 
-                typer.echo(
-                    f"To invoke your deployed agent, send a POST request to {invoke_url} with your properly formatted payload."
-                )
-                example_cmd = f"""Example:
+                if json_output:
+                    output_json({
+                        "status": "success",
+                        "workspace_name": agent_workspace_name,
+                        "deployment_name": agent_deployment_name,
+                        "workspace_uuid": workspace_uuid,
+                        "invoke_url": invoke_url,
+                    })
+                else:
+                    typer.echo(
+                        f"Agent deployed successfully! ({agent_workspace_name}/{agent_deployment_name})"
+                    )
+                    typer.echo(
+                        f"To invoke your deployed agent, send a POST request to {invoke_url} with your properly formatted payload."
+                    )
+                    example_cmd = f"""Example:
   curl -X POST {invoke_url} \\
     -H "Authorization: Bearer $DIGITALOCEAN_API_TOKEN" \\
     -H "Content-Type: application/json" \\
     -d '{{"prompt": "hello"}}'"""
-                typer.echo(example_cmd)
+                    typer.echo(example_cmd)
 
         asyncio.run(deploy())
 
+    except typer.Exit:
+        # Re-raise typer.Exit without additional processing
+        raise
     except EnvironmentError as e:
+        if json_output:
+            output_json_error(str(e))
         typer.echo(f"❌ {e}", err=True)
         typer.echo("\nTo set your token:", err=True)
         typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
     except Exception as e:
-        import traceback
-
         # Get error message with fallback
         error_msg = str(e) if str(e) else repr(e)
 
         # Check for "feature not enabled" error
         if "feature not enabled" in error_msg.lower():
+            if json_output:
+                output_json_error(f"Deployment failed: {error_msg}. The Gradient ADK is currently in public preview.")
             typer.echo(f"❌ Deployment failed: {error_msg}", err=True)
             typer.echo(
                 "\nThe Gradient ADK is currently in public preview. To access it, enable it for your team via:",
@@ -462,6 +535,8 @@ def agent_deploy(
             )
             raise typer.Exit(1)
 
+        if json_output:
+            output_json_error(f"Deployment failed: {error_msg}")
         typer.echo(f"❌ Deployment failed: {error_msg}", err=True)
 
         typer.echo(
@@ -567,12 +642,20 @@ def agent_logs(
         help="DigitalOcean API token (overrides DIGITALOCEAN_API_TOKEN env var)",
         envvar="DIGITALOCEAN_API_TOKEN",
         hide_input=True,
-    )
+    ),
+    output: OutputFormat = typer.Option(
+        OutputFormat.TEXT,
+        "--output",
+        "-o",
+        help="Output format (text or json)",
+    ),
 ):
     """View runtime logs for the deployed agent."""
     import asyncio
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
     from gradient_adk.digital_ocean_api.errors import DOAPIClientError
+
+    json_output = output == OutputFormat.JSON
 
     try:
         # Get configuration
@@ -581,6 +664,8 @@ def agent_logs(
 
         # Check if configuration exists
         if not agent_workspace_name or not agent_deployment_name:
+            if json_output:
+                output_json_error("Agent configuration not found. No .gradient/agent.yml configuration file found in the current directory.")
             typer.echo("❌ Agent configuration not found.", err=True)
             typer.echo(
                 "\nNo .gradient/agent.yml configuration file found in the current directory.",
@@ -592,11 +677,17 @@ def agent_logs(
 
         # Get API token
         if not api_token:
-            api_token = get_do_api_token()
+            try:
+                api_token = get_do_api_token()
+            except EnvironmentError as e:
+                if json_output:
+                    output_json_error(str(e))
+                raise
 
-        typer.echo(
-            f"📋 Fetching logs for {agent_workspace_name}/{agent_deployment_name}..."
-        )
+        if not json_output:
+            typer.echo(
+                f"📋 Fetching logs for {agent_workspace_name}/{agent_deployment_name}..."
+            )
 
         # Create async function to use context manager
         async def fetch_logs():
@@ -609,16 +700,30 @@ def agent_logs(
                 return logs
 
         logs = asyncio.run(fetch_logs())
-        typer.echo()
-        typer.echo(logs)
+
+        if json_output:
+            output_json({
+                "status": "success",
+                "workspace_name": agent_workspace_name,
+                "deployment_name": agent_deployment_name,
+                "logs": logs,
+            })
+        else:
+            typer.echo()
+            typer.echo(logs)
 
     except EnvironmentError as e:
+        if json_output:
+            output_json_error(str(e))
         typer.echo(f"❌ {e}", err=True)
         typer.echo("\nTo set your token:", err=True)
         typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
     except DOAPIClientError as e:
         if e.status_code == 404:
+            error_msg = f"Agent '{agent_workspace_name}/{agent_deployment_name}' not found. The agent may not be deployed yet."
+            if json_output:
+                output_json_error(error_msg)
             typer.echo(
                 f"❌ Agent '{agent_workspace_name}/{agent_deployment_name}' not found.",
                 err=True,
@@ -629,10 +734,14 @@ def agent_logs(
             )
             typer.echo("  gradient agent deploy", err=True)
         else:
+            if json_output:
+                output_json_error(f"Failed to fetch logs: {e}")
             typer.echo(f"❌ Failed to fetch logs: {e}", err=True)
         raise typer.Exit(1)
     except Exception as e:
         error_msg = str(e) if str(e) else repr(e)
+        if json_output:
+            output_json_error(f"Failed to fetch logs: {error_msg}")
         typer.echo(f"❌ Failed to fetch logs: {error_msg}", err=True)
         raise typer.Exit(1)
 
