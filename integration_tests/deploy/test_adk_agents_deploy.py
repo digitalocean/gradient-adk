@@ -922,6 +922,7 @@ class TestADKAgentsDeployE2E:
         to avoid conflicts with other tests.
         """
         import asyncio
+        import json
         import time
         logger = logging.getLogger(__name__)
 
@@ -966,42 +967,54 @@ class TestADKAgentsDeployE2E:
 
                 logger.info(f"Testing deploy --output json | jq for agent {agent_name}")
 
-                # Test extracting workspace_uuid with jq
+                # Deploy and capture the full JSON output first, then pipe to jq
+                # This avoids potential issues with broken pipes
                 result = subprocess.run(
-                    "gradient agent deploy --output json | jq -r '.workspace_uuid'",
+                    ["gradient", "agent", "deploy", "--output", "json"],
                     cwd=temp_path,
                     capture_output=True,
                     text=True,
-                    shell=True,
                     timeout=600,  # 10 minute timeout for deployment
                     env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
                 )
 
-                assert result.returncode == 0, f"Deploy and jq should have succeeded. stderr: {result.stderr}"
+                assert result.returncode == 0, f"Deploy should have succeeded. stderr: {result.stderr}"
 
-                # The output should be just the workspace_uuid (a string)
-                workspace_uuid = result.stdout.strip()
-                assert len(workspace_uuid) > 0, "workspace_uuid should not be empty"
-                # UUID format validation (rough check)
-                assert "-" in workspace_uuid or len(workspace_uuid) == 36, \
-                    f"workspace_uuid should look like a UUID, got: {workspace_uuid}"
+                # Verify we can parse the JSON
+                parsed = json.loads(result.stdout)
+                assert parsed["status"] == "success", f"JSON should have status: success, got: {parsed}"
+                assert "workspace_uuid" in parsed, f"JSON should have workspace_uuid, got: {parsed}"
+                assert "invoke_url" in parsed, f"JSON should have invoke_url, got: {parsed}"
+
+                # Now test that jq can extract the fields
+                jq_result = subprocess.run(
+                    ["jq", "-r", ".workspace_uuid"],
+                    input=result.stdout,
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+
+                assert jq_result.returncode == 0, f"jq should have succeeded. stderr: {jq_result.stderr}"
+                workspace_uuid = jq_result.stdout.strip()
+                assert workspace_uuid == parsed["workspace_uuid"], \
+                    f"jq extracted workspace_uuid should match: {workspace_uuid} vs {parsed['workspace_uuid']}"
 
                 logger.info(f"Successfully extracted workspace_uuid via jq: {workspace_uuid}")
 
-                # Test extracting invoke_url with jq (using a second deploy to the same agent)
-                result2 = subprocess.run(
-                    "gradient agent deploy --output json | jq -r '.invoke_url'",
-                    cwd=temp_path,
+                # Test extracting invoke_url with jq
+                jq_result2 = subprocess.run(
+                    ["jq", "-r", ".invoke_url"],
+                    input=result.stdout,
                     capture_output=True,
                     text=True,
-                    shell=True,
-                    timeout=600,  # 10 minute timeout for deployment
-                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                    timeout=30,
                 )
 
-                assert result2.returncode == 0, f"Second deploy and jq should have succeeded. stderr: {result2.stderr}"
-
-                invoke_url = result2.stdout.strip()
+                assert jq_result2.returncode == 0, f"jq should have succeeded for invoke_url. stderr: {jq_result2.stderr}"
+                invoke_url = jq_result2.stdout.strip()
+                assert invoke_url == parsed["invoke_url"], \
+                    f"jq extracted invoke_url should match: {invoke_url} vs {parsed['invoke_url']}"
                 assert "agents.do-ai.run" in invoke_url, \
                     f"invoke_url should contain agents.do-ai.run, got: {invoke_url}"
 
