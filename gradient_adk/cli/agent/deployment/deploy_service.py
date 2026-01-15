@@ -194,15 +194,17 @@ class AgentDeployService:
                 agent_workspace_name=agent_workspace_name,
                 agent_deployment_name=agent_deployment_name,
             )
-            logger.info(
-                f"Deployment '{agent_deployment_name}' exists - will create new release"
-            )
+            if not self.quiet:
+                logger.info(
+                    f"Deployment '{agent_deployment_name}' exists - will create new release"
+                )
             return True, True
         except DOAPIClientError as e:
             if e.status_code == 404:
-                logger.info(
-                    f"Deployment '{agent_deployment_name}' does not exist - will create new"
-                )
+                if not self.quiet:
+                    logger.info(
+                        f"Deployment '{agent_deployment_name}' does not exist - will create new"
+                    )
                 return True, False
             raise
 
