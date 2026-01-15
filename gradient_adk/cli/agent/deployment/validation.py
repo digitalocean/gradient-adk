@@ -16,7 +16,7 @@ class ValidationError(Exception):
 
 
 def validate_agent_entrypoint(
-    source_dir: Path, entrypoint_file: str, verbose: bool = False
+    source_dir: Path, entrypoint_file: str, verbose: bool = False, quiet: bool = False
 ) -> None:
     """
     Validate that the agent can run successfully in a fresh environment.
@@ -28,14 +28,16 @@ def validate_agent_entrypoint(
         source_dir: Directory containing the agent source code
         entrypoint_file: Relative path to the entrypoint file (e.g., "main.py")
         verbose: Whether to print verbose validation output
+        quiet: Whether to suppress all output (for JSON mode)
 
     Raises:
         ValidationError: If validation fails
     """
-    print(
-        f"🔍 Validating agent can run before deployment... (skip this step with --skip-validation)"
-    )
-    if verbose:
+    if not quiet:
+        print(
+            f"🔍 Validating agent can run before deployment... (skip this step with --skip-validation)"
+        )
+    if verbose and not quiet:
         print(f"🔍 Validating agent before deployment...")
         print(f"   Source: {source_dir}")
         print(f"   Entrypoint: {entrypoint_file}")

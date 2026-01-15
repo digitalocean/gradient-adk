@@ -719,6 +719,20 @@ class TestADKAgentsDeployE2E:
         """Get the path to the echo agent directory."""
         return Path(__file__).parent.parent / "example_agents" / "echo_agent"
 
+    @staticmethod
+    async def _cleanup_agent_workspace(api_token: str, agent_name: str):
+        """Helper to cleanup an agent workspace after test."""
+        from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+
+        logger = logging.getLogger(__name__)
+        try:
+            async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
+                await client.delete_agent_workspace(agent_name)
+                logger.info(f"Cleaned up agent workspace: {agent_name}")
+        except Exception as e:
+            # Log but don't fail the test on cleanup errors
+            logger.warning(f"Failed to cleanup agent workspace {agent_name}: {e}")
+
     @pytest.mark.cli
     @pytest.mark.e2e
     def test_deploy_success(self, echo_agent_dir):
@@ -731,6 +745,7 @@ class TestADKAgentsDeployE2E:
         Note: This test will deploy an agent named 'e2e-test-deploy-{timestamp}'
         to avoid conflicts with other tests.
         """
+        import asyncio
         import time
         logger = logging.getLogger(__name__)
 
@@ -744,55 +759,59 @@ class TestADKAgentsDeployE2E:
         timestamp = int(time.time())
         agent_name = f"e2e-test-deploy-{timestamp}"
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
 
-            # Copy the echo agent main.py
-            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+                # Copy the echo agent main.py
+                shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
 
-            # Create .gradient directory and config
-            gradient_dir = temp_path / ".gradient"
-            gradient_dir.mkdir()
+                # Create .gradient directory and config
+                gradient_dir = temp_path / ".gradient"
+                gradient_dir.mkdir()
 
-            config = {
-                "agent_name": agent_name,
-                "agent_environment": "main",
-                "entrypoint_file": "main.py",
-            }
+                config = {
+                    "agent_name": agent_name,
+                    "agent_environment": "main",
+                    "entrypoint_file": "main.py",
+                }
 
-            with open(gradient_dir / "agent.yml", "w") as f:
-                yaml.safe_dump(config, f)
+                with open(gradient_dir / "agent.yml", "w") as f:
+                    yaml.safe_dump(config, f)
 
-            # Create requirements.txt
-            requirements_path = temp_path / "requirements.txt"
-            requirements_path.write_text("gradient-adk\n")
+                # Create requirements.txt
+                requirements_path = temp_path / "requirements.txt"
+                requirements_path.write_text("gradient-adk\n")
 
-            logger.info(f"Testing successful deploy for agent {agent_name}")
+                logger.info(f"Testing successful deploy for agent {agent_name}")
 
-            result = subprocess.run(
-                ["gradient", "agent", "deploy"],
-                cwd=temp_path,
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minute timeout for deployment
-                env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
-            )
+                result = subprocess.run(
+                    ["gradient", "agent", "deploy"],
+                    cwd=temp_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 minute timeout for deployment
+                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                )
 
-            combined_output = result.stdout + result.stderr
+                combined_output = result.stdout + result.stderr
 
-            assert result.returncode == 0, f"Deploy should have succeeded. Output: {combined_output}"
+                assert result.returncode == 0, f"Deploy should have succeeded. Output: {combined_output}"
 
-            # Check for success indicators in output
-            assert "deployed successfully" in combined_output.lower() or \
-                   "agent deployed" in combined_output.lower(), \
-                f"Expected success message in output, got: {combined_output}"
+                # Check for success indicators in output
+                assert "deployed successfully" in combined_output.lower() or \
+                       "agent deployed" in combined_output.lower(), \
+                    f"Expected success message in output, got: {combined_output}"
 
-            # Check that invoke URL is shown
-            assert "invoke" in combined_output.lower() or \
-                   "agents.do-ai.run" in combined_output, \
-                f"Expected invoke URL in output, got: {combined_output}"
+                # Check that invoke URL is shown
+                assert "invoke" in combined_output.lower() or \
+                       "agents.do-ai.run" in combined_output, \
+                    f"Expected invoke URL in output, got: {combined_output}"
 
-            logger.info(f"Successfully deployed agent {agent_name}")
+                logger.info(f"Successfully deployed agent {agent_name}")
+        finally:
+            # Cleanup the deployed agent workspace
+            asyncio.run(self._cleanup_agent_workspace(api_token, agent_name))
 
     @pytest.mark.cli
     @pytest.mark.e2e
@@ -806,6 +825,7 @@ class TestADKAgentsDeployE2E:
         Note: This test will deploy an agent named 'e2e-test-json-{timestamp}'
         to avoid conflicts with other tests.
         """
+        import asyncio
         import json
         import time
         logger = logging.getLogger(__name__)
@@ -820,69 +840,73 @@ class TestADKAgentsDeployE2E:
         timestamp = int(time.time())
         agent_name = f"e2e-test-json-{timestamp}"
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
 
-            # Copy the echo agent main.py
-            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+                # Copy the echo agent main.py
+                shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
 
-            # Create .gradient directory and config
-            gradient_dir = temp_path / ".gradient"
-            gradient_dir.mkdir()
+                # Create .gradient directory and config
+                gradient_dir = temp_path / ".gradient"
+                gradient_dir.mkdir()
 
-            config = {
-                "agent_name": agent_name,
-                "agent_environment": "main",
-                "entrypoint_file": "main.py",
-            }
+                config = {
+                    "agent_name": agent_name,
+                    "agent_environment": "main",
+                    "entrypoint_file": "main.py",
+                }
 
-            with open(gradient_dir / "agent.yml", "w") as f:
-                yaml.safe_dump(config, f)
+                with open(gradient_dir / "agent.yml", "w") as f:
+                    yaml.safe_dump(config, f)
 
-            # Create requirements.txt
-            requirements_path = temp_path / "requirements.txt"
-            requirements_path.write_text("gradient-adk\n")
+                # Create requirements.txt
+                requirements_path = temp_path / "requirements.txt"
+                requirements_path.write_text("gradient-adk\n")
 
-            logger.info(f"Testing successful deploy --output json for agent {agent_name}")
+                logger.info(f"Testing successful deploy --output json for agent {agent_name}")
 
-            result = subprocess.run(
-                ["gradient", "agent", "deploy", "--output", "json"],
-                cwd=temp_path,
-                capture_output=True,
-                text=True,
-                timeout=600,  # 10 minute timeout for deployment
-                env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
-            )
+                result = subprocess.run(
+                    ["gradient", "agent", "deploy", "--output", "json"],
+                    cwd=temp_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 minute timeout for deployment
+                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                )
 
-            assert result.returncode == 0, f"Deploy should have succeeded. stderr: {result.stderr}"
+                assert result.returncode == 0, f"Deploy should have succeeded. stderr: {result.stderr}"
 
-            # stdout should contain valid JSON with deployment info
-            try:
-                parsed = json.loads(result.stdout)
-                assert parsed["status"] == "success", f"JSON should have status: success, got: {parsed}"
-                assert "workspace_name" in parsed, f"JSON should have workspace_name, got: {parsed}"
-                assert "deployment_name" in parsed, f"JSON should have deployment_name, got: {parsed}"
-                assert "workspace_uuid" in parsed, f"JSON should have workspace_uuid, got: {parsed}"
-                assert "invoke_url" in parsed, f"JSON should have invoke_url, got: {parsed}"
+                # stdout should contain valid JSON with deployment info
+                try:
+                    parsed = json.loads(result.stdout)
+                    assert parsed["status"] == "success", f"JSON should have status: success, got: {parsed}"
+                    assert "workspace_name" in parsed, f"JSON should have workspace_name, got: {parsed}"
+                    assert "deployment_name" in parsed, f"JSON should have deployment_name, got: {parsed}"
+                    assert "workspace_uuid" in parsed, f"JSON should have workspace_uuid, got: {parsed}"
+                    assert "invoke_url" in parsed, f"JSON should have invoke_url, got: {parsed}"
 
-                # Verify the values match what we configured
-                assert parsed["workspace_name"] == agent_name, \
-                    f"workspace_name should be {agent_name}, got: {parsed['workspace_name']}"
-                assert parsed["deployment_name"] == "main", \
-                    f"deployment_name should be 'main', got: {parsed['deployment_name']}"
+                    # Verify the values match what we configured
+                    assert parsed["workspace_name"] == agent_name, \
+                        f"workspace_name should be {agent_name}, got: {parsed['workspace_name']}"
+                    assert parsed["deployment_name"] == "main", \
+                        f"deployment_name should be 'main', got: {parsed['deployment_name']}"
 
-                # Verify invoke_url format
-                assert "agents.do-ai.run" in parsed["invoke_url"], \
-                    f"invoke_url should contain agents.do-ai.run, got: {parsed['invoke_url']}"
-                assert parsed["workspace_uuid"] in parsed["invoke_url"], \
-                    f"invoke_url should contain workspace_uuid, got: {parsed['invoke_url']}"
+                    # Verify invoke_url format
+                    assert "agents.do-ai.run" in parsed["invoke_url"], \
+                        f"invoke_url should contain agents.do-ai.run, got: {parsed['invoke_url']}"
+                    assert parsed["workspace_uuid"] in parsed["invoke_url"], \
+                        f"invoke_url should contain workspace_uuid, got: {parsed['invoke_url']}"
 
-                logger.info(f"Successfully deployed agent {agent_name} with JSON output")
-                logger.info(f"  workspace_uuid: {parsed['workspace_uuid']}")
-                logger.info(f"  invoke_url: {parsed['invoke_url']}")
+                    logger.info(f"Successfully deployed agent {agent_name} with JSON output")
+                    logger.info(f"  workspace_uuid: {parsed['workspace_uuid']}")
+                    logger.info(f"  invoke_url: {parsed['invoke_url']}")
 
-            except json.JSONDecodeError as e:
-                pytest.fail(f"stdout should be valid JSON, got: {result.stdout}")
+                except json.JSONDecodeError as e:
+                    pytest.fail(f"stdout should be valid JSON, got: {result.stdout}")
+        finally:
+            # Cleanup the deployed agent workspace
+            asyncio.run(self._cleanup_agent_workspace(api_token, agent_name))
 
     @pytest.mark.cli
     @pytest.mark.e2e
@@ -897,6 +921,7 @@ class TestADKAgentsDeployE2E:
         Note: This test will deploy an agent named 'e2e-test-jq-{timestamp}'
         to avoid conflicts with other tests.
         """
+        import asyncio
         import time
         logger = logging.getLogger(__name__)
 
@@ -915,68 +940,72 @@ class TestADKAgentsDeployE2E:
         timestamp = int(time.time())
         agent_name = f"e2e-test-jq-{timestamp}"
 
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_path = Path(temp_dir)
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
 
-            # Copy the echo agent main.py
-            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+                # Copy the echo agent main.py
+                shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
 
-            # Create .gradient directory and config
-            gradient_dir = temp_path / ".gradient"
-            gradient_dir.mkdir()
+                # Create .gradient directory and config
+                gradient_dir = temp_path / ".gradient"
+                gradient_dir.mkdir()
 
-            config = {
-                "agent_name": agent_name,
-                "agent_environment": "main",
-                "entrypoint_file": "main.py",
-            }
+                config = {
+                    "agent_name": agent_name,
+                    "agent_environment": "main",
+                    "entrypoint_file": "main.py",
+                }
 
-            with open(gradient_dir / "agent.yml", "w") as f:
-                yaml.safe_dump(config, f)
+                with open(gradient_dir / "agent.yml", "w") as f:
+                    yaml.safe_dump(config, f)
 
-            # Create requirements.txt
-            requirements_path = temp_path / "requirements.txt"
-            requirements_path.write_text("gradient-adk\n")
+                # Create requirements.txt
+                requirements_path = temp_path / "requirements.txt"
+                requirements_path.write_text("gradient-adk\n")
 
-            logger.info(f"Testing deploy --output json | jq for agent {agent_name}")
+                logger.info(f"Testing deploy --output json | jq for agent {agent_name}")
 
-            # Test extracting workspace_uuid with jq
-            result = subprocess.run(
-                "gradient agent deploy --output json | jq -r '.workspace_uuid'",
-                cwd=temp_path,
-                capture_output=True,
-                text=True,
-                shell=True,
-                timeout=600,  # 10 minute timeout for deployment
-                env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
-            )
+                # Test extracting workspace_uuid with jq
+                result = subprocess.run(
+                    "gradient agent deploy --output json | jq -r '.workspace_uuid'",
+                    cwd=temp_path,
+                    capture_output=True,
+                    text=True,
+                    shell=True,
+                    timeout=600,  # 10 minute timeout for deployment
+                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                )
 
-            assert result.returncode == 0, f"Deploy and jq should have succeeded. stderr: {result.stderr}"
+                assert result.returncode == 0, f"Deploy and jq should have succeeded. stderr: {result.stderr}"
 
-            # The output should be just the workspace_uuid (a string)
-            workspace_uuid = result.stdout.strip()
-            assert len(workspace_uuid) > 0, "workspace_uuid should not be empty"
-            # UUID format validation (rough check)
-            assert "-" in workspace_uuid or len(workspace_uuid) == 36, \
-                f"workspace_uuid should look like a UUID, got: {workspace_uuid}"
+                # The output should be just the workspace_uuid (a string)
+                workspace_uuid = result.stdout.strip()
+                assert len(workspace_uuid) > 0, "workspace_uuid should not be empty"
+                # UUID format validation (rough check)
+                assert "-" in workspace_uuid or len(workspace_uuid) == 36, \
+                    f"workspace_uuid should look like a UUID, got: {workspace_uuid}"
 
-            logger.info(f"Successfully extracted workspace_uuid via jq: {workspace_uuid}")
+                logger.info(f"Successfully extracted workspace_uuid via jq: {workspace_uuid}")
 
-            # Test extracting invoke_url with jq (using a second deploy to the same agent)
-            result2 = subprocess.run(
-                "gradient agent deploy --output json | jq -r '.invoke_url'",
-                cwd=temp_path,
-                capture_output=True,
-                text=True,
-                shell=True,
-                timeout=600,  # 10 minute timeout for deployment
-                env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
-            )
+                # Test extracting invoke_url with jq (using a second deploy to the same agent)
+                result2 = subprocess.run(
+                    "gradient agent deploy --output json | jq -r '.invoke_url'",
+                    cwd=temp_path,
+                    capture_output=True,
+                    text=True,
+                    shell=True,
+                    timeout=600,  # 10 minute timeout for deployment
+                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                )
 
-            assert result2.returncode == 0, f"Second deploy and jq should have succeeded. stderr: {result2.stderr}"
+                assert result2.returncode == 0, f"Second deploy and jq should have succeeded. stderr: {result2.stderr}"
 
-            invoke_url = result2.stdout.strip()
-            assert "agents.do-ai.run" in invoke_url, \
-                f"invoke_url should contain agents.do-ai.run, got: {invoke_url}"
+                invoke_url = result2.stdout.strip()
+                assert "agents.do-ai.run" in invoke_url, \
+                    f"invoke_url should contain agents.do-ai.run, got: {invoke_url}"
 
-            logger.info(f"Successfully extracted invoke_url via jq: {invoke_url}")
+                logger.info(f"Successfully extracted invoke_url via jq: {invoke_url}")
+        finally:
+            # Cleanup the deployed agent workspace
+            asyncio.run(self._cleanup_agent_workspace(api_token, agent_name))

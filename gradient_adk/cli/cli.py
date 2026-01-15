@@ -395,6 +395,7 @@ def agent_deploy(
                     source_dir=Path.cwd(),
                     entrypoint_file=entrypoint_file,
                     verbose=verbose and not json_output,
+                    quiet=json_output,
                 )
             except ValidationError as e:
                 error_msg = f"Validation failed: {e}"
@@ -712,6 +713,9 @@ def agent_logs(
             typer.echo()
             typer.echo(logs)
 
+    except typer.Exit:
+        # Re-raise typer.Exit without additional processing
+        raise
     except EnvironmentError as e:
         if json_output:
             output_json_error(str(e))

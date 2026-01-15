@@ -1017,3 +1017,15 @@ class ListEvaluationMetricsOutput(BaseModel):
     metrics: List[EvaluationMetric] = Field(
         default_factory=list, description="List of evaluation metrics"
     )
+
+
+class DeleteAgentWorkspaceOutput(BaseModel):
+    """
+    Response for deleting an agent workspace.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    agent_workspace_name: str = Field(
+        ..., description="The name of the deleted agent workspace"
+    )
