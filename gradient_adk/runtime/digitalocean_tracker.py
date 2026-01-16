@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import contextvars
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 import inspect
 import json
 from typing import Any, Callable, Dict, List, Optional
+import uuid
 
 from gradient_adk.digital_ocean_api import (
     AsyncDigitalOceanGenAI,
@@ -30,8 +33,57 @@ def _utc(dt: datetime | None = None) -> datetime:
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
 
 
+@dataclass
+class RequestState:
+    """Per-request state for tracking spans and trace data.
+    
+    This class holds all the mutable state needed during a single request's
+    lifecycle. Using this with contextvars ensures proper isolation between
+    concurrent requests.
+    """
+    request_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+    req: Dict[str, Any] = field(default_factory=dict)
+    live: Dict[str, NodeExecution] = field(default_factory=dict)
+    done: List[NodeExecution] = field(default_factory=list)
+    is_evaluation: bool = False
+    session_id: Optional[str] = None
+    network_snapshot_token: int = 0  # Token for tracking network requests for this request
+
+
+# Context variable for request-scoped state
+# Each async task/request gets its own copy of the RequestState
+_request_state: contextvars.ContextVar[Optional[RequestState]] = contextvars.ContextVar(
+    "request_state", default=None
+)
+
+
+def get_current_request_state() -> Optional[RequestState]:
+    """Get the current request state from context."""
+    return _request_state.get()
+
+
+def set_current_request_state(state: Optional[RequestState]) -> contextvars.Token:
+    """Set the current request state in context. Returns a token for resetting."""
+    return _request_state.set(state)
+
+
+def reset_request_state(token: contextvars.Token) -> None:
+    """Reset the request state to its previous value."""
+    _request_state.reset(token)
+
+
 class DigitalOceanTracesTracker:
-    """Collect executions and submit a single trace on request end."""
+    """Collect executions and submit a single trace on request end.
+    
+    This tracker uses contextvars to maintain per-request state, ensuring
+    proper isolation when multiple requests are processed concurrently.
+    Each request gets its own RequestState that tracks:
+    - The request metadata (inputs, outputs, errors)
+    - In-progress span executions (live)
+    - Completed span executions (done)
+    - Evaluation mode flag
+    - Session ID
+    """
 
     def __init__(
         self,
@@ -44,14 +96,49 @@ class DigitalOceanTracesTracker:
         self._ws = agent_workspace_name
         self._dep = agent_deployment_name
 
-        self._req: Dict[str, Any] = {}
-        self._live: dict[str, NodeExecution] = {}
-        self._done: List[NodeExecution] = []
+        # Global state that's safe to share across requests
         self._inflight: set[asyncio.Task] = set()
         self._collection_tasks: set[asyncio.Task] = (
             set()
         )  # Tasks collecting async generator outputs
+
+        # Legacy instance variables for backward compatibility with tests
+        # These are now only used when no request context is active
+        self._req: Dict[str, Any] = {}
+        self._live: dict[str, NodeExecution] = {}
+        self._done: List[NodeExecution] = []
         self._is_evaluation: bool = False
+        self._session_id: Optional[str] = None
+
+    def _get_state(self) -> RequestState:
+        """Get the current request state, creating one if needed.
+        
+        This method ensures backward compatibility by:
+        1. Using the contextvar state if available (concurrent-safe)
+        2. Falling back to instance state for legacy usage/tests
+        """
+        state = get_current_request_state()
+        if state is not None:
+            return state
+        
+        # Fallback to legacy instance state (not concurrent-safe)
+        # This maintains backward compatibility for tests and simple usage
+        return RequestState(
+            request_id="legacy",
+            req=self._req,
+            live=self._live,
+            done=self._done,
+            is_evaluation=self._is_evaluation,
+            session_id=self._session_id,
+        )
+
+    def _ensure_state(self) -> RequestState:
+        """Ensure we have a request state, creating one in context if needed."""
+        state = get_current_request_state()
+        if state is None:
+            state = RequestState()
+            set_current_request_state(state)
+        return state
 
     def on_request_start(
         self,
@@ -59,13 +146,34 @@ class DigitalOceanTracesTracker:
         inputs: Dict[str, Any],
         is_evaluation: bool = False,
         session_id: Optional[str] = None,
-    ) -> None:
-        # NEW: reset buffers per request
-        self._live.clear()
-        self._done.clear()
+    ) -> contextvars.Token:
+        """Start tracking a new request.
+        
+        Creates a new RequestState in the context for this request.
+        Returns a token that can be used to reset the context when the request ends.
+        
+        IMPORTANT: The caller should store the returned token and call
+        reset_request_state(token) when the request completes to properly
+        clean up the context.
+        """
+        # Create fresh state for this request (isolated from other concurrent requests)
+        state = RequestState(
+            is_evaluation=is_evaluation,
+            session_id=session_id,
+        )
+        state.req = {"entrypoint": entrypoint, "inputs": inputs}
+        
+        # Set in context and return token for cleanup
+        token = set_current_request_state(state)
+        
+        # Also update legacy instance variables for backward compatibility
+        self._live = state.live
+        self._done = state.done
         self._is_evaluation = is_evaluation
         self._session_id = session_id
-        self._req = {"entrypoint": entrypoint, "inputs": inputs}
+        self._req = state.req
+        
+        return token
 
     def _as_async_iterable_and_setter(
         self, resp
@@ -118,14 +226,27 @@ class DigitalOceanTracesTracker:
         return None
 
     def on_request_end(self, outputs: Any | None, error: Optional[str]) -> None:
+        """End tracking for the current request.
+        
+        This method uses the request state from context to ensure proper
+        isolation between concurrent requests.
+        """
+        state = self._get_state()
+        
         # Common fields
+        state.req["error"] = error
+        # Also update legacy instance variable for backward compatibility
         self._req["error"] = error
 
         # Streaming path
         wrapped = self._as_async_iterable_and_setter(outputs)
         if wrapped is not None:
             orig_iterable, set_iterable = wrapped
-            self._req["outputs"] = None  # will be filled after streaming finishes
+            state.req["outputs"] = None  # will be filled after streaming finishes
+            self._req["outputs"] = None
+
+            # Capture state reference for use in the async generator
+            captured_state = state
 
             async def collecting_iter():
                 collected: list[str] = []
@@ -153,13 +274,16 @@ class DigitalOceanTracesTracker:
                         yield chunk
 
                     # Stream complete - submit collected content
+                    captured_state.req["outputs"] = "".join(collected)
                     self._req["outputs"] = "".join(collected)
-                    await self._submit()
+                    await self._submit_state(captured_state)
                 except Exception as e:
                     # Error during streaming
+                    captured_state.req["error"] = str(e)
+                    captured_state.req["outputs"] = "".join(collected) if collected else None
                     self._req["error"] = str(e)
                     self._req["outputs"] = "".join(collected) if collected else None
-                    await self._submit()
+                    await self._submit_state(captured_state)
                     raise
 
             set_iterable(collecting_iter())
@@ -167,13 +291,16 @@ class DigitalOceanTracesTracker:
 
         # Non-streaming - always fire-and-forget
         # For evaluation mode, decorator will call submit_and_get_trace_id() directly
+        state.req["outputs"] = outputs
         self._req["outputs"] = outputs
 
-        if not self._is_evaluation:
+        if not state.is_evaluation:
             # Regular fire-and-forget for non-evaluation requests
+            # Capture state for the async task
+            captured_state = state
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(self._submit())
+                task = loop.create_task(self._submit_state(captured_state))
                 self._inflight.add(task)
 
                 def _done_cb(t: asyncio.Task) -> None:
@@ -185,20 +312,47 @@ class DigitalOceanTracesTracker:
 
                 task.add_done_callback(_done_cb)
             except RuntimeError:
-                asyncio.run(self._submit())
+                asyncio.run(self._submit_state(captured_state))
 
     async def submit_and_get_trace_id(self) -> Optional[str]:
         """
         Submit the trace and return the trace_id.
         Only call this for evaluation requests after on_request_end has been called.
         """
-        return await self._submit()
+        state = self._get_state()
+        return await self._submit_state(state)
 
     def on_node_start(self, node: NodeExecution) -> None:
+        """Start tracking a node execution.
+        
+        Uses the current request state from context for proper isolation.
+        """
+        state = self._get_state()
+        state.live[node.node_id] = node
+        # Also update legacy instance variable for backward compatibility
         self._live[node.node_id] = node
 
     def on_node_end(self, node: NodeExecution, outputs: Any | None) -> None:
-        live = self._live.pop(node.node_id, node)
+        """End tracking for a node execution.
+        
+        Uses the current request state from context for proper isolation.
+        """
+        state = self._get_state()
+        
+        # Check if we're using context-based state or legacy instance state
+        # If state.done is the same object as self._done, we're in legacy mode
+        # and should not double-add
+        using_legacy = state.done is self._done
+        
+        # Try to get from state first, fall back to legacy
+        live = state.live.pop(node.node_id, None)
+        if live is None:
+            live = self._live.pop(node.node_id, node)
+        else:
+            # Also remove from legacy for consistency (only if different objects)
+            if not using_legacy:
+                self._live.pop(node.node_id, None)
+            
         live.end_time = _utc()
 
         # Handle async generators that may have slipped through
@@ -217,7 +371,7 @@ class DigitalOceanTracesTracker:
                     "streaming": True,
                     "_debug": "Async generator reached on_node_end without collection. Check instrumentor.",
                 }
-                self._done.append(live)
+                state.done.append(live)
                 return
             if is_stringified_gen:
                 # This happens when _freeze() is called on an async generator
@@ -225,11 +379,11 @@ class DigitalOceanTracesTracker:
                     "streaming": True,
                     "_debug": "Async generator was converted to string. Instrumentor should not freeze async generators.",
                 }
-                self._done.append(live)
+                state.done.append(live)
                 return
 
         live.outputs = outputs
-        self._done.append(live)
+        state.done.append(live)
 
     async def _collect_async_generator_outputs(self, node: NodeExecution, gen) -> None:
         """Collect content from an async generator and update node outputs.
@@ -276,10 +430,29 @@ class DigitalOceanTracesTracker:
             node.outputs = {"error": f"Error collecting stream: {str(e)}"}
 
     def on_node_error(self, node: NodeExecution, error: BaseException) -> None:
-        live = self._live.pop(node.node_id, node)
+        """Record an error for a node execution.
+        
+        Uses the current request state from context for proper isolation.
+        """
+        state = self._get_state()
+        
+        # Check if we're using context-based state or legacy instance state
+        # If state.done is the same object as self._done, we're in legacy mode
+        # and should not double-add
+        using_legacy = state.done is self._done
+        
+        # Try to get from state first, fall back to legacy
+        live = state.live.pop(node.node_id, None)
+        if live is None:
+            live = self._live.pop(node.node_id, node)
+        else:
+            # Also remove from legacy for consistency (only if different objects)
+            if not using_legacy:
+                self._live.pop(node.node_id, None)
+            
         live.end_time = _utc()
         live.error = str(error)
-        self._done.append(live)
+        state.done.append(live)
 
     async def aclose(self) -> None:
         # Wait for both collection tasks and submission tasks
@@ -291,6 +464,7 @@ class DigitalOceanTracesTracker:
         await self._client.aclose()
 
     async def _submit(self) -> Optional[str]:
+        """Submit the trace using legacy instance state (backward compatibility)."""
         try:
             # Wait for any pending async generator collections to complete
             # This ensures node outputs are fully collected before building the trace
@@ -314,6 +488,77 @@ class DigitalOceanTracesTracker:
         except Exception:
             # never break user code on export errors
             return None
+
+    async def _submit_state(self, state: RequestState) -> Optional[str]:
+        """Submit a trace using the provided request state.
+        
+        This is the concurrent-safe submission method that uses explicit state
+        rather than relying on instance variables.
+        
+        Args:
+            state: The RequestState containing the spans and request metadata
+                   for this specific request.
+        
+        Returns:
+            The trace UUID if submission succeeded, None otherwise.
+        """
+        try:
+            # Wait for any pending async generator collections to complete
+            # This ensures node outputs are fully collected before building the trace
+            if self._collection_tasks:
+                await asyncio.gather(
+                    *list(self._collection_tasks), return_exceptions=True
+                )
+
+            trace = self._build_trace_from_state(state)
+            req = CreateTracesInput(
+                agent_workspace_name=self._ws,
+                agent_deployment_name=self._dep,
+                traces=[trace],
+                session_id=state.session_id,
+            )
+            result = await self._client.create_traces(req)
+            # Return first trace_uuid if available
+            if result.trace_uuids:
+                return result.trace_uuids[0]
+            return None
+        except Exception:
+            # never break user code on export errors
+            return None
+
+    def _build_trace_from_state(self, state: RequestState) -> Trace:
+        """Build a Trace from the provided request state.
+        
+        This is the concurrent-safe trace building method that uses explicit state
+        rather than relying on instance variables.
+        
+        Args:
+            state: The RequestState containing the spans and request metadata
+                   for this specific request.
+        
+        Returns:
+            A Trace object ready for submission.
+        """
+        spans = [self._to_span(ex) for ex in state.done]
+        created_at = min((s.created_at for s in spans), default=_utc())
+        name = str(state.req.get("entrypoint", "request"))
+
+        inputs = self._coerce_top(state.req.get("inputs"), "input")
+        outputs = self._coerce_top(state.req.get("outputs"), "output")
+
+        # If there was a request-level error, include it in the top-level output
+        if state.req.get("error") is not None:
+            outputs = dict(outputs)
+            outputs["error"] = state.req["error"]
+
+        trace = Trace(
+            created_at=created_at,
+            name=name,
+            input=inputs,
+            output=outputs,
+            spans=spans,
+        )
+        return trace
 
     def _to_span(self, ex: NodeExecution) -> Span:
         # Base payloads - keep dicts as-is, wrap everything else

@@ -44,6 +44,7 @@ logger = get_logger(__name__)
 # This is idempotent and will only install instrumentation once
 # Each instrumentor checks for its own environment variable to allow disabling
 from gradient_adk.runtime.helpers import capture_all, get_tracker
+from gradient_adk.runtime.digitalocean_tracker import reset_request_state
 
 capture_all()
 
