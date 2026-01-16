@@ -50,3 +50,6 @@ Thumbs.db
 # Gradient CLI
 .gradient/
 *.env
+
+# Examples (local development)
+examples/
