@@ -1,2 +1,0 @@
-ID,query,expected_response
-1,"{""prompt"": ""Whats the weather in nyc?""}", "The weather in NYC is sunny with a high of 75F."

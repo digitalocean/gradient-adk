@@ -1,4 +1,0 @@
-gradient-adk==0.2.4
-langgraph
-langchain-core
-gradient
