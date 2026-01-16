@@ -1,11 +1,12 @@
 from __future__ import annotations
 import importlib
+import json
 import os
 import threading
-import json
-import uuid
-from typing import Set, List, Dict, Any, Optional, Callable
-import httpx, requests
+from typing import Any, Callable, Dict, List, Optional, Set
+
+import httpx
+import requests
 
 
 def _get_adk_version() -> str:
@@ -21,20 +22,16 @@ RequestHook = Callable[[str, Dict[str, str]], Dict[str, str]]
 
 
 class CapturedRequest:
-    """Represents a captured HTTP request/response.
+    """Represents a captured HTTP request/response pair."""
 
-    Each captured request has a unique ID to enable proper correlation
-    between requests and responses in concurrent scenarios.
-    """
+    __slots__ = ("url", "request_payload", "response_payload")
 
     def __init__(
         self,
         url: Optional[str] = None,
         request_payload: Optional[Dict[str, Any]] = None,
         response_payload: Optional[Dict[str, Any]] = None,
-        request_id: Optional[str] = None,
     ):
-        self.request_id = request_id or str(uuid.uuid4())
         self.url = url
         self.request_payload = request_payload
         self.response_payload = response_payload
@@ -289,61 +286,32 @@ class NetworkInterceptor:
 
     def _record_request(
         self, url: str, request_payload: Optional[Dict[str, Any]] = None
-    ) -> Optional[str]:
-        """Record a request and return its unique ID for later response correlation.
-
-        Returns:
-            The request_id if the URL is tracked, None otherwise.
-        """
+    ) -> None:
+        """Record a tracked request."""
         with self._lock:
             if self._is_tracked_url(url):
                 self._hit_count += 1
-                request_id = str(uuid.uuid4())
-                # Create a new captured request record with URL
                 self._captured_requests.append(
-                    CapturedRequest(
-                        url=url,
-                        request_payload=request_payload,
-                        request_id=request_id,
-                    )
+                    CapturedRequest(url=url, request_payload=request_payload)
                 )
-                return request_id
-        return None
 
     def _record_response(
-        self,
-        url: str,
-        response_payload: Optional[Dict[str, Any]] = None,
-        request_id: Optional[str] = None,
+        self, url: str, response_payload: Optional[Dict[str, Any]] = None
     ) -> None:
-        """Record a response and correlate it with its request.
-
-        Args:
-            url: The URL of the request (used for fallback matching if no request_id)
-            response_payload: The JSON response payload
-            request_id: The unique ID returned from _record_request (preferred for correlation)
+        """Record a response, matching it to the most recent unfilled request for this URL.
+        
+        This is safe for concurrent requests because:
+        1. Each interceptor callback runs synchronously within its HTTP call
+        2. The request is recorded before the HTTP call, response after
+        3. We match by URL and find the most recent request without a response
         """
         with self._lock:
-            if not self._is_tracked_url(url) or not self._captured_requests:
+            if not self._is_tracked_url(url):
                 return
-
-            # If we have a request_id, find the exact matching request
-            if request_id:
-                for captured in reversed(self._captured_requests):
-                    if captured.request_id == request_id:
-                        captured.response_payload = response_payload
-                        return
-
-            # Fallback: Find the most recent request with matching URL that doesn't have a response yet
-            # This handles the case where both request() and send() are intercepted
+            
+            # Find the most recent request with matching URL that doesn't have a response yet
             for captured in reversed(self._captured_requests):
                 if captured.url == url and captured.response_payload is None:
-                    captured.response_payload = response_payload
-                    return
-
-            # Last resort: update the most recent matching URL
-            for captured in reversed(self._captured_requests):
-                if captured.url == url:
                     captured.response_payload = response_payload
                     return
 

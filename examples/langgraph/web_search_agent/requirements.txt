@@ -1,0 +1,9 @@
+langgraph
+langchain_community
+pyjwt>=2.10.1
+duckduckgo-search
+gradient
+gradient-adk
+langchain-gradient
+ddgs
+langchain-openai

@@ -373,77 +373,68 @@ class TestConcurrentErrorHandling:
 class TestNetworkInterceptorConcurrency:
     """Test network interceptor behavior under concurrent requests."""
 
-    def test_captured_request_has_unique_id(self):
-        """Test that CapturedRequest objects have unique IDs."""
+    def test_captured_request_basic_fields(self):
+        """Test that CapturedRequest stores basic fields correctly."""
         from gradient_adk.runtime.network_interceptor import CapturedRequest
         
-        req1 = CapturedRequest(url="http://test.com")
-        req2 = CapturedRequest(url="http://test.com")
+        req = CapturedRequest(
+            url="http://test.com",
+            request_payload={"data": "test"},
+            response_payload={"result": "ok"},
+        )
         
-        assert req1.request_id != req2.request_id
+        assert req.url == "http://test.com"
+        assert req.request_payload == {"data": "test"}
+        assert req.response_payload == {"result": "ok"}
 
-    def test_response_correlation_by_request_id(self):
-        """Test that responses can be correlated by request ID."""
+    def test_response_correlation_by_url(self):
+        """Test that responses are correlated with requests by URL."""
         from gradient_adk.runtime.network_interceptor import NetworkInterceptor
         
         interceptor = NetworkInterceptor()
         interceptor.add_endpoint_pattern("test.com")
         
-        # Record two requests
-        id1 = interceptor._record_request(
+        # Record two requests to different URLs
+        interceptor._record_request(
             "http://test.com/api1",
             {"payload": "request1"}
         )
-        id2 = interceptor._record_request(
+        interceptor._record_request(
             "http://test.com/api2",
             {"payload": "request2"}
         )
         
-        assert id1 is not None
-        assert id2 is not None
-        assert id1 != id2
-        
-        # Record responses out of order
+        # Record responses - they match by URL to the most recent unfilled request
         interceptor._record_response(
             "http://test.com/api2",
             {"result": "response2"},
-            request_id=id2,
         )
         interceptor._record_response(
             "http://test.com/api1",
             {"result": "response1"},
-            request_id=id1,
         )
         
         # Verify correct correlation
         captured = interceptor.get_captured_requests_since(0)
         assert len(captured) == 2
         
-        # Find by request ID
-        req1 = next(c for c in captured if c.request_id == id1)
-        req2 = next(c for c in captured if c.request_id == id2)
+        # Find by URL
+        req1 = next(c for c in captured if c.url == "http://test.com/api1")
+        req2 = next(c for c in captured if c.url == "http://test.com/api2")
         
         assert req1.response_payload == {"result": "response1"}
         assert req2.response_payload == {"result": "response2"}
 
-    def test_response_fallback_to_url_matching(self):
-        """Test response correlation falls back to URL matching when no request_id."""
+    def test_response_matches_unfilled_request(self):
+        """Test that response matches the most recent unfilled request for a URL."""
         from gradient_adk.runtime.network_interceptor import NetworkInterceptor
         
         interceptor = NetworkInterceptor()
         interceptor.add_endpoint_pattern("test.com")
         
-        # Record request
-        interceptor._record_request(
-            "http://test.com/api",
-            {"payload": "data"}
-        )
-        
-        # Record response without request_id (legacy behavior)
-        interceptor._record_response(
-            "http://test.com/api",
-            {"result": "data"},
-        )
+        # Record request and response
+        interceptor._record_request("http://test.com/api", {"payload": "data"})
+        interceptor._record_response("http://test.com/api", {"result": "data"})
         
         captured = interceptor.get_captured_requests_since(0)
         assert len(captured) == 1

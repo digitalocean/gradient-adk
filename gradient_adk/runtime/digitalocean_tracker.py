@@ -111,18 +111,12 @@ class DigitalOceanTracesTracker:
         self._session_id: Optional[str] = None
 
     def _get_state(self) -> RequestState:
-        """Get the current request state, creating one if needed.
-        
-        This method ensures backward compatibility by:
-        1. Using the contextvar state if available (concurrent-safe)
-        2. Falling back to instance state for legacy usage/tests
-        """
+        """Get the current request state from context, or fall back to legacy instance state."""
         state = get_current_request_state()
         if state is not None:
             return state
         
-        # Fallback to legacy instance state (not concurrent-safe)
-        # This maintains backward compatibility for tests and simple usage
+        # Fallback: wrap legacy instance state (for tests/simple usage)
         return RequestState(
             request_id="legacy",
             req=self._req,
@@ -131,14 +125,6 @@ class DigitalOceanTracesTracker:
             is_evaluation=self._is_evaluation,
             session_id=self._session_id,
         )
-
-    def _ensure_state(self) -> RequestState:
-        """Ensure we have a request state, creating one in context if needed."""
-        state = get_current_request_state()
-        if state is None:
-            state = RequestState()
-            set_current_request_state(state)
-        return state
 
     def on_request_start(
         self,

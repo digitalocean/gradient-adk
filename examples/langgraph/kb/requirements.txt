@@ -1,0 +1,4 @@
+langchain_core
+langchain_openai
+gradient_adk
+langchain

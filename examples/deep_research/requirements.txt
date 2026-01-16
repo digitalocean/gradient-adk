@@ -1,0 +1,5 @@
+ddgs
+langchain_community
+gradient-adk
+langchain_openai
+httpx
