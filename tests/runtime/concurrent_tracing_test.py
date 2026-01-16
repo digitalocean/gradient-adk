@@ -387,32 +387,26 @@ class TestNetworkInterceptorConcurrency:
         assert req.request_payload == {"data": "test"}
         assert req.response_payload == {"result": "ok"}
 
-    def test_response_correlation_by_url(self):
-        """Test that responses are correlated with requests by URL."""
+    def test_direct_correlation_different_urls(self):
+        """Test that responses are correlated using direct object reference."""
         from gradient_adk.runtime.network_interceptor import NetworkInterceptor
         
         interceptor = NetworkInterceptor()
         interceptor.add_endpoint_pattern("test.com")
         
-        # Record two requests to different URLs
-        interceptor._record_request(
+        # Record two requests to different URLs - keep references
+        captured1 = interceptor._record_request(
             "http://test.com/api1",
             {"payload": "request1"}
         )
-        interceptor._record_request(
+        captured2 = interceptor._record_request(
             "http://test.com/api2",
             {"payload": "request2"}
         )
         
-        # Record responses - they match by URL to the most recent unfilled request
-        interceptor._record_response(
-            "http://test.com/api2",
-            {"result": "response2"},
-        )
-        interceptor._record_response(
-            "http://test.com/api1",
-            {"result": "response1"},
-        )
+        # Record responses using direct object references
+        interceptor._record_response(captured2, {"result": "response2"})
+        interceptor._record_response(captured1, {"result": "response1"})
         
         # Verify correct correlation
         captured = interceptor.get_captured_requests_since(0)
@@ -425,20 +419,60 @@ class TestNetworkInterceptorConcurrency:
         assert req1.response_payload == {"result": "response1"}
         assert req2.response_payload == {"result": "response2"}
 
-    def test_response_matches_unfilled_request(self):
-        """Test that response matches the most recent unfilled request for a URL."""
+    def test_direct_correlation_same_url(self):
+        """Test that concurrent same-URL requests are correlated correctly."""
         from gradient_adk.runtime.network_interceptor import NetworkInterceptor
         
         interceptor = NetworkInterceptor()
         interceptor.add_endpoint_pattern("test.com")
         
-        # Record request and response
-        interceptor._record_request("http://test.com/api", {"payload": "data"})
-        interceptor._record_response("http://test.com/api", {"result": "data"})
+        # Simulate concurrent requests to the SAME URL
+        captured1 = interceptor._record_request(
+            "http://test.com/api",
+            {"payload": "request1"}
+        )
+        captured2 = interceptor._record_request(
+            "http://test.com/api",
+            {"payload": "request2"}
+        )
         
+        # Response for request 2 comes back first (different response times)
+        interceptor._record_response(captured2, {"result": "response2"})
+        # Response for request 1 comes back later
+        interceptor._record_response(captured1, {"result": "response1"})
+        
+        # Verify CORRECT correlation despite same URL
+        assert captured1.response_payload == {"result": "response1"}
+        assert captured2.response_payload == {"result": "response2"}
+        
+        # Verify list integrity
         captured = interceptor.get_captured_requests_since(0)
-        assert len(captured) == 1
-        assert captured[0].response_payload == {"result": "data"}
+        assert len(captured) == 2
+
+    def test_record_request_returns_captured_object(self):
+        """Test that _record_request returns the CapturedRequest for tracked URLs."""
+        from gradient_adk.runtime.network_interceptor import NetworkInterceptor
+        
+        interceptor = NetworkInterceptor()
+        interceptor.add_endpoint_pattern("test.com")
+        
+        # Tracked URL returns CapturedRequest
+        captured = interceptor._record_request("http://test.com/api", {"data": "test"})
+        assert captured is not None
+        assert captured.url == "http://test.com/api"
+        assert captured.request_payload == {"data": "test"}
+        
+        # Non-tracked URL returns None
+        captured_none = interceptor._record_request("http://other.com/api", {"data": "test"})
+        assert captured_none is None
+
+    def test_record_response_handles_none(self):
+        """Test that _record_response safely handles None captured request."""
+        from gradient_adk.runtime.network_interceptor import NetworkInterceptor
+        
+        interceptor = NetworkInterceptor()
+        # Should not raise any errors
+        interceptor._record_response(None, {"result": "data"})
 
 
 class TestRaceConditionPrevention:

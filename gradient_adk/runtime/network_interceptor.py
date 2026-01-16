@@ -1,4 +1,5 @@
 from __future__ import annotations
+import contextvars
 import importlib
 import json
 import os
@@ -7,6 +8,28 @@ from typing import Any, Callable, Dict, List, Optional, Set
 
 import httpx
 import requests
+
+
+# Context variable to track captured requests for the current request scope
+# This ensures concurrent requests see only their own captured HTTP calls
+_request_captured_list: contextvars.ContextVar[Optional[List["CapturedRequest"]]] = contextvars.ContextVar(
+    "request_captured_list", default=None
+)
+
+
+def get_request_captured_list() -> Optional[List["CapturedRequest"]]:
+    """Get the captured request list for the current request scope."""
+    return _request_captured_list.get()
+
+
+def set_request_captured_list(lst: Optional[List["CapturedRequest"]]) -> contextvars.Token:
+    """Set the captured request list for the current scope. Returns a token for resetting."""
+    return _request_captured_list.set(lst)
+
+
+def reset_request_captured_list(token: contextvars.Token) -> None:
+    """Reset the captured request list to its previous value."""
+    _request_captured_list.reset(token)
 
 
 def _get_adk_version() -> str:
@@ -136,24 +159,21 @@ class NetworkInterceptor:
                 )
 
             request_payload = _global_interceptor._extract_request_payload(request)
-            _global_interceptor._record_request(url_str, request_payload)
+            captured = _global_interceptor._record_request(url_str, request_payload)
 
             response = await _global_interceptor._original_httpx_send(
                 self_client, request, **kwargs
             )
 
             # Don't read response body for streaming responses - it would buffer the entire stream!
-            # Check if this is a streaming response by looking at response headers
-            # Note: Only check content-type for SSE, not transfer-encoding (chunked is common for both)
             content_type = response.headers.get("content-type", "")
             is_streaming = "text/event-stream" in content_type
 
-            if not is_streaming:
+            if not is_streaming and captured:
                 response_payload = await _global_interceptor._extract_response_payload(
                     response
                 )
-                _global_interceptor._record_response(url_str, response_payload)
-            # For streaming responses, we skip payload capture to preserve streaming behavior
+                _global_interceptor._record_response(captured, response_payload)
 
             return response
 
@@ -195,16 +215,17 @@ class NetworkInterceptor:
                 )
 
             request_payload = _global_interceptor._extract_request_payload(request)
-            _global_interceptor._record_request(url_str, request_payload)
+            captured = _global_interceptor._record_request(url_str, request_payload)
 
             response = _global_interceptor._original_httpx_sync_send(
                 self_client, request, **kwargs
             )
 
-            response_payload = _global_interceptor._extract_response_payload_sync(
-                response
-            )
-            _global_interceptor._record_response(url_str, response_payload)
+            if captured:
+                response_payload = _global_interceptor._extract_response_payload_sync(
+                    response
+                )
+                _global_interceptor._record_response(captured, response_payload)
 
             return response
 
@@ -239,16 +260,19 @@ class NetworkInterceptor:
             request_payload = _global_interceptor._extract_request_payload_from_kwargs(
                 kwargs
             )
-            _global_interceptor._record_request(url_str, request_payload)
+            captured = _global_interceptor._record_request(url_str, request_payload)
 
             response = _global_interceptor._original_requests_request(
                 self_session, method, url, **kwargs
             )
 
-            response_payload = (
-                _global_interceptor._extract_response_payload_from_requests(response)
-            )
-            _global_interceptor._record_response(url_str, response_payload)
+            if captured:
+                response_payload = (
+                    _global_interceptor._extract_response_payload_from_requests(
+                        response
+                    )
+                )
+                _global_interceptor._record_response(captured, response_payload)
 
             return response
 
@@ -286,34 +310,34 @@ class NetworkInterceptor:
 
     def _record_request(
         self, url: str, request_payload: Optional[Dict[str, Any]] = None
-    ) -> None:
-        """Record a tracked request."""
+    ) -> Optional[CapturedRequest]:
+        """Record a tracked request and return it for direct response correlation.
+        
+        Also adds the captured request to the per-request list (if active) for
+        proper isolation in concurrent request scenarios.
+        """
         with self._lock:
             if self._is_tracked_url(url):
                 self._hit_count += 1
-                self._captured_requests.append(
-                    CapturedRequest(url=url, request_payload=request_payload)
-                )
+                captured = CapturedRequest(url=url, request_payload=request_payload)
+                self._captured_requests.append(captured)
+                
+                # Also add to per-request list for concurrent isolation
+                request_list = get_request_captured_list()
+                if request_list is not None:
+                    request_list.append(captured)
+                
+                return captured
+        return None
 
     def _record_response(
-        self, url: str, response_payload: Optional[Dict[str, Any]] = None
+        self,
+        captured: Optional[CapturedRequest],
+        response_payload: Optional[Dict[str, Any]] = None,
     ) -> None:
-        """Record a response, matching it to the most recent unfilled request for this URL.
-        
-        This is safe for concurrent requests because:
-        1. Each interceptor callback runs synchronously within its HTTP call
-        2. The request is recorded before the HTTP call, response after
-        3. We match by URL and find the most recent request without a response
-        """
-        with self._lock:
-            if not self._is_tracked_url(url):
-                return
-            
-            # Find the most recent request with matching URL that doesn't have a response yet
-            for captured in reversed(self._captured_requests):
-                if captured.url == url and captured.response_payload is None:
-                    captured.response_payload = response_payload
-                    return
+        """Record a response on the specific captured request."""
+        if captured is not None:
+            captured.response_payload = response_payload
 
     def _extract_request_payload(self, request) -> Optional[Dict[str, Any]]:
         """Extract JSON payload from httpx Request object."""

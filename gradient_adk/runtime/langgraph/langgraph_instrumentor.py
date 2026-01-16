@@ -16,6 +16,7 @@ from ..interfaces import NodeExecution
 from ..digitalocean_tracker import DigitalOceanTracesTracker
 from ..network_interceptor import (
     get_network_interceptor,
+    get_request_captured_list,
     is_inference_url,
     is_kbaas_url,
 )
@@ -223,15 +224,35 @@ def _canonical_output(
 
 
 def _snap():
+    """Snapshot the current state for tracking HTTP calls during a node.
+    
+    Returns:
+        (interceptor, snapshot_index) where snapshot_index is the current length
+        of the per-request captured list (or 0 if not in a request context).
+    """
     intr = get_network_interceptor()
-    try:
-        tok = intr.snapshot_token()
-    except Exception:
-        tok = 0
+    # Use per-request captured list length as the snapshot token
+    request_list = get_request_captured_list()
+    if request_list is not None:
+        tok = len(request_list)
+    else:
+        # Fallback to global token (for tests/simple usage without request context)
+        try:
+            tok = intr.snapshot_token()
+        except Exception:
+            tok = 0
     return intr, tok
 
 
 def _had_hits_since(intr, token) -> bool:
+    """Check if any tracked HTTP calls happened since the snapshot.
+    
+    Uses per-request captured list for proper isolation in concurrent scenarios.
+    """
+    request_list = get_request_captured_list()
+    if request_list is not None:
+        return len(request_list) > token
+    # Fallback to global interceptor
     try:
         return intr.hits_since(token) > 0
     except Exception:
@@ -240,6 +261,10 @@ def _had_hits_since(intr, token) -> bool:
 
 def _get_captured_payloads_with_type(intr, token) -> tuple:
     """Get captured API request/response payloads and classify the call type.
+
+    Uses per-request captured list for proper isolation in concurrent scenarios.
+    This ensures each node sees only the HTTP calls made during its execution,
+    not calls from other concurrent requests.
 
     When using httpx, both request() and send() are intercepted, which can result
     in two CapturedRequest records for a single HTTP call. The request() interception
@@ -253,7 +278,15 @@ def _get_captured_payloads_with_type(intr, token) -> tuple:
         (request_payload, response_payload, is_llm, is_retriever)
     """
     try:
-        captured = intr.get_captured_requests_since(token)
+        # Use per-request captured list for concurrent isolation
+        request_list = get_request_captured_list()
+        if request_list is not None:
+            # Get requests captured since the snapshot token
+            captured = request_list[token:] if token < len(request_list) else []
+        else:
+            # Fallback to global interceptor (for tests/simple usage)
+            captured = intr.get_captured_requests_since(token)
+        
         if captured:
             # Search in reverse order to find a captured request with a response.
             # This handles the case where both request() and send() are intercepted:

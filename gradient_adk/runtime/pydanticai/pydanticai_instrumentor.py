@@ -13,6 +13,7 @@ from ..interfaces import NodeExecution
 from ..digitalocean_tracker import DigitalOceanTracesTracker
 from ..network_interceptor import (
     get_network_interceptor,
+    get_request_captured_list,
     is_inference_url,
     is_kbaas_url,
 )
@@ -131,15 +132,35 @@ def _snapshot_args_kwargs(a: Tuple[Any, ...], kw: Dict[str, Any]) -> Any:
 
 
 def _snap():
+    """Snapshot the current state for tracking HTTP calls during a span.
+    
+    Returns:
+        (interceptor, snapshot_index) where snapshot_index is the current length
+        of the per-request captured list (or 0 if not in a request context).
+    """
     intr = get_network_interceptor()
-    try:
-        tok = intr.snapshot_token()
-    except Exception:
-        tok = 0
+    # Use per-request captured list length as the snapshot token
+    request_list = get_request_captured_list()
+    if request_list is not None:
+        tok = len(request_list)
+    else:
+        # Fallback to global token (for tests/simple usage without request context)
+        try:
+            tok = intr.snapshot_token()
+        except Exception:
+            tok = 0
     return intr, tok
 
 
 def _had_hits_since(intr, token) -> bool:
+    """Check if any tracked HTTP calls happened since the snapshot.
+    
+    Uses per-request captured list for proper isolation in concurrent scenarios.
+    """
+    request_list = get_request_captured_list()
+    if request_list is not None:
+        return len(request_list) > token
+    # Fallback to global interceptor
     try:
         return intr.hits_since(token) > 0
     except Exception:
@@ -149,13 +170,31 @@ def _had_hits_since(intr, token) -> bool:
 def _get_captured_payloads_with_type(intr, token) -> tuple:
     """Get captured API request/response payloads and classify the call type.
 
+    Uses per-request captured list for proper isolation in concurrent scenarios.
+
     Returns:
         (request_payload, response_payload, is_llm, is_retriever)
     """
     try:
-        captured = intr.get_captured_requests_since(token)
+        # Use per-request captured list for concurrent isolation
+        request_list = get_request_captured_list()
+        if request_list is not None:
+            # Get requests captured since the snapshot token
+            captured = request_list[token:] if token < len(request_list) else []
+        else:
+            # Fallback to global interceptor (for tests/simple usage)
+            captured = intr.get_captured_requests_since(token)
+        
         if captured:
-            # Use the first captured request (most common case)
+            # Search in reverse order to find a captured request with a response
+            for call in reversed(captured):
+                if call.response_payload is not None:
+                    url = call.url
+                    is_llm = is_inference_url(url)
+                    is_retriever = is_kbaas_url(url)
+                    return call.request_payload, call.response_payload, is_llm, is_retriever
+
+            # Fallback to the first captured request if none have a response
             call = captured[0]
             url = call.url
             is_llm = is_inference_url(url)

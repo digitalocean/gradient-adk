@@ -22,6 +22,10 @@ from gradient_adk.digital_ocean_api import (
     WorkflowSpanDetails,
 )
 from .interfaces import NodeExecution
+from .network_interceptor import (
+    set_request_captured_list,
+    reset_request_captured_list,
+)
 
 from datetime import datetime, timezone
 from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
@@ -31,6 +35,10 @@ def _utc(dt: datetime | None = None) -> datetime:
     if dt is None:
         return datetime.now(timezone.utc)
     return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
+# Import CapturedRequest for type annotation
+from .network_interceptor import CapturedRequest
 
 
 @dataclass
@@ -47,7 +55,8 @@ class RequestState:
     done: List[NodeExecution] = field(default_factory=list)
     is_evaluation: bool = False
     session_id: Optional[str] = None
-    network_snapshot_token: int = 0  # Token for tracking network requests for this request
+    captured_requests: List[CapturedRequest] = field(default_factory=list)  # Per-request HTTP calls
+    _captured_list_token: Optional[contextvars.Token] = field(default=None, repr=False)
 
 
 # Context variable for request-scoped state
@@ -148,6 +157,11 @@ class DigitalOceanTracesTracker:
             session_id=session_id,
         )
         state.req = {"entrypoint": entrypoint, "inputs": inputs}
+        
+        # Set up per-request captured list for network interceptor
+        # This ensures concurrent requests see only their own HTTP calls
+        captured_list_token = set_request_captured_list(state.captured_requests)
+        state._captured_list_token = captured_list_token
         
         # Set in context and return token for cleanup
         token = set_current_request_state(state)
