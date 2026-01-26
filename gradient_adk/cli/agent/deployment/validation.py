@@ -50,14 +50,16 @@ def validate_agent_entrypoint(
             f"Expected at: {entrypoint_path}"
         )
 
-    # Check if requirements.txt exists
+    # Check if a dependency file exists (requirements.txt or pyproject.toml)
     requirements_path = source_dir / "requirements.txt"
-    if not requirements_path.exists():
+    pyproject_path = source_dir / "pyproject.toml"
+    if not requirements_path.exists() and not pyproject_path.exists():
         raise ValidationError(
-            f"No requirements.txt found in {source_dir}\n"
-            f"A requirements.txt file is required for deployment.\n\n"
+            f"No requirements.txt or pyproject.toml found in {source_dir}\n"
+            f"A dependency file is required for deployment.\n\n"
             f"Create a requirements.txt with at minimum:\n"
-            f"  gradient-adk\n"
+            f"  gradient-adk\n\n"
+            f"Or create a pyproject.toml with gradient-adk in dependencies."
         )
 
     # Check for config file
@@ -108,22 +110,43 @@ def validate_agent_entrypoint(
             pip_path = venv_path / "bin" / "pip"
             python_path = venv_path / "bin" / "python"
 
-        # Install requirements
-        if verbose:
-            print(f"📦 Installing dependencies from requirements.txt...")
+        # Install dependencies
+        # Prefer requirements.txt, fall back to pyproject.toml
+        temp_requirements = temp_dir / "requirements.txt"
+        temp_pyproject = temp_dir / "pyproject.toml"
 
-        result = subprocess.run(
-            [str(pip_path), "install", "-r", "requirements.txt"],
-            cwd=temp_dir,
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 minutes for dependency installation
-        )
+        if temp_requirements.exists():
+            if verbose:
+                print(f"📦 Installing dependencies from requirements.txt...")
+            result = subprocess.run(
+                [str(pip_path), "install", "-r", "requirements.txt"],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutes for dependency installation
+            )
+            dep_file = "requirements.txt"
+        elif temp_pyproject.exists():
+            if verbose:
+                print(f"📦 Installing dependencies from pyproject.toml...")
+            result = subprocess.run(
+                [str(pip_path), "install", "."],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minutes for dependency installation
+            )
+            dep_file = "pyproject.toml"
+        else:
+            raise ValidationError(
+                "No dependency file found in validation environment.\n"
+                "This should not happen - please report this bug."
+            )
 
         if result.returncode != 0:
             raise ValidationError(
                 f"Failed to install dependencies:\n{result.stderr}\n\n"
-                f"Fix your requirements.txt and try again."
+                f"Fix your {dep_file} and try again."
             )
 
         if verbose:
@@ -231,20 +254,35 @@ except Exception as e:
 def _copy_source_files(source_dir: Path, dest_dir: Path, verbose: bool = False) -> None:
     """Copy source files to destination, excluding common patterns."""
 
-    # Common exclusions
+    # Common exclusions - kept in sync with zip_utils.py
     exclude_patterns = {
+        # Archive files
+        "*.zip",
+        # Virtual environments
+        "env",
+        "venv",
+        ".venv",
+        # Python cache
         "__pycache__",
         "*.pyc",
-        ".git",
-        ".venv",
-        "venv",
-        "env",
-        "node_modules",
-        ".pytest_cache",
-        ".mypy_cache",
+        # Package build artifacts
         "*.egg-info",
         "dist",
         "build",
+        # Version control
+        ".git",
+        # UV/package manager artifacts
+        ".uv",
+        # IDE/Editor files
+        ".idea",
+        ".vscode",
+        # Node.js (in case of mixed projects)
+        "node_modules",
+        # Test/coverage artifacts
+        ".pytest_cache",
+        ".mypy_cache",
+        "htmlcov",
+        ".coverage",
     }
 
     def should_exclude(path: Path) -> bool:

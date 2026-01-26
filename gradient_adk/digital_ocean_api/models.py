@@ -449,6 +449,9 @@ class CreateAgentWorkspaceDeploymentInput(BaseModel):
         description="Description of the agent deployment (max 1000 characters)",
         max_length=1000,
     )
+    python_environment_config: Optional["PythonEnvironmentConfig"] = Field(
+        None, description="Optional Python environment configuration"
+    )
 
 
 class CreateAgentWorkspaceDeploymentOutput(BaseModel):
@@ -477,6 +480,9 @@ class CreateAgentDeploymentReleaseInput(BaseModel):
     )
     library_version: Optional[str] = Field(
         None, description="Version of the ADK library used to create this release"
+    )
+    python_environment_config: Optional["PythonEnvironmentConfig"] = Field(
+        None, description="Optional Python environment configuration"
     )
 
 
@@ -534,6 +540,9 @@ class CreateAgentWorkspaceInput(BaseModel):
         None,
         description="Description of the agent workspace deployment (max 1000 characters)",
         max_length=1000,
+    )
+    python_environment_config: Optional["PythonEnvironmentConfig"] = Field(
+        None, description="Optional Python environment configuration"
     )
 
 
@@ -1028,4 +1037,49 @@ class DeleteAgentWorkspaceOutput(BaseModel):
 
     agent_workspace_name: str = Field(
         ..., description="The name of the deleted agent workspace"
+    )
+
+
+class PythonVersion(str, Enum):
+    """Python version for agent deployments."""
+
+    PYTHON_VERSION_UNKNOWN = "PYTHON_VERSION_UNKNOWN"
+    PYTHON_VERSION_3_10 = "PYTHON_VERSION_3_10"
+    PYTHON_VERSION_3_11 = "PYTHON_VERSION_3_11"
+    PYTHON_VERSION_3_12 = "PYTHON_VERSION_3_12"
+    PYTHON_VERSION_3_13 = "PYTHON_VERSION_3_13"
+    PYTHON_VERSION_3_14 = "PYTHON_VERSION_3_14"
+
+
+class PythonPackageManager(str, Enum):
+    """Package manager for Python dependencies."""
+
+    PYTHON_PACKAGE_MANAGER_UNKNOWN = "PYTHON_PACKAGE_MANAGER_UNKNOWN"
+    PYTHON_PACKAGE_MANAGER_PIP = "PYTHON_PACKAGE_MANAGER_PIP"
+    PYTHON_PACKAGE_MANAGER_UV = "PYTHON_PACKAGE_MANAGER_UV"
+
+
+class PythonDependencyFile(str, Enum):
+    """Dependency file type for Python projects."""
+
+    PYTHON_DEPENDENCY_FILE_UNKNOWN = "PYTHON_DEPENDENCY_FILE_UNKNOWN"
+    PYTHON_DEPENDENCY_FILE_REQUIREMENTS_TXT = "PYTHON_DEPENDENCY_FILE_REQUIREMENTS_TXT"
+    PYTHON_DEPENDENCY_FILE_PYPROJECT_TOML = "PYTHON_DEPENDENCY_FILE_PYPROJECT_TOML"
+
+
+class PythonEnvironmentConfig(BaseModel):
+    """
+    Python environment configuration for agent deployments.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    python_version: PythonVersion = Field(
+        ..., description="The Python version to use"
+    )
+    package_manager: PythonPackageManager = Field(
+        ..., description="The package manager to use for installing dependencies"
+    )
+    dependency_file: PythonDependencyFile = Field(
+        ..., description="The dependency file type"
     )
