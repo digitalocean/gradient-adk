@@ -711,6 +711,348 @@ async def main(query, context):
             pytest.fail(f"stderr should be valid JSON, got: {result.stderr}")
 
 
+class TestADKAgentsDeployPythonEnvironment:
+    """Tests for Python environment detection during deploy."""
+
+    @pytest.fixture
+    def echo_agent_dir(self):
+        """Get the path to the echo agent directory."""
+        return Path(__file__).parent.parent / "example_agents" / "echo_agent"
+
+    @pytest.fixture
+    def setup_valid_agent(self, echo_agent_dir):
+        """
+        Setup a temporary directory with a valid agent structure.
+        Yields the temp directory path and cleans up after.
+        """
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Copy the echo agent main.py
+            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+            # Create .gradient directory and config
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+
+            config = {
+                "agent_name": "test-echo-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+
+            with open(gradient_dir / "agent.yml", "w") as f:
+                yaml.safe_dump(config, f)
+
+            # Create requirements.txt
+            requirements_path = temp_path / "requirements.txt"
+            requirements_path.write_text("gradient-adk\n")
+
+            yield temp_path
+
+    @pytest.mark.cli
+    def test_deploy_missing_dependency_file(self, echo_agent_dir):
+        """
+        Test that deploy fails when neither requirements.txt nor pyproject.toml exists.
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Copy the echo agent main.py
+            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+            # Create .gradient directory and config
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+
+            config = {
+                "agent_name": "test-echo-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+
+            with open(gradient_dir / "agent.yml", "w") as f:
+                yaml.safe_dump(config, f)
+
+            # Don't create requirements.txt or pyproject.toml
+
+            logger.info(f"Testing deploy without dependency file in {temp_dir}")
+
+            result = subprocess.run(
+                ["gradient", "agent", "deploy", "--skip-validation"],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+            )
+
+            assert result.returncode != 0, "Deploy should have failed without dependency file"
+
+            combined_output = result.stdout + result.stderr
+            assert any(
+                term in combined_output.lower()
+                for term in ["no dependency file", "requirements.txt", "pyproject.toml"]
+            ), f"Expected error about missing dependency file, got: {combined_output}"
+
+            logger.info("Correctly failed without dependency file")
+
+    @pytest.mark.cli
+    def test_deploy_unsupported_python_version(self, setup_valid_agent):
+        """
+        Test that deploy fails when Python version is not supported (3.10-3.14).
+        """
+        logger = logging.getLogger(__name__)
+        temp_path = setup_valid_agent
+
+        # Create .python-version with unsupported version
+        (temp_path / ".python-version").write_text("3.9\n")
+
+        logger.info(f"Testing deploy with unsupported Python version in {temp_path}")
+
+        result = subprocess.run(
+            ["gradient", "agent", "deploy", "--skip-validation"],
+            cwd=temp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+        )
+
+        assert result.returncode != 0, "Deploy should have failed with unsupported Python version"
+
+        combined_output = result.stdout + result.stderr
+        assert any(
+            term in combined_output.lower()
+            for term in ["not supported", "3.9", "supported versions"]
+        ), f"Expected error about unsupported Python version, got: {combined_output}"
+
+        logger.info("Correctly failed with unsupported Python version")
+
+    @pytest.mark.cli
+    def test_deploy_both_dependency_files_warning(self, setup_valid_agent, caplog):
+        """
+        Test that deploy warns when both requirements.txt and pyproject.toml exist.
+        This test just verifies the warning appears, not full deployment success.
+        """
+        logger = logging.getLogger(__name__)
+        temp_path = setup_valid_agent
+
+        # Both requirements.txt (already exists from fixture) and pyproject.toml
+        (temp_path / "pyproject.toml").write_text('[project]\nname = "test"\n')
+
+        logger.info(f"Testing deploy with both dependency files in {temp_path}")
+
+        result = subprocess.run(
+            ["gradient", "agent", "deploy", "--skip-validation", "--verbose"],
+            cwd=temp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+        )
+
+        combined_output = result.stdout + result.stderr
+        # Should show warning about both files (may fail at API call, but warning should appear)
+        assert "both requirements.txt and pyproject.toml" in combined_output.lower() or \
+               "using requirements.txt" in combined_output.lower(), \
+            f"Expected warning about both dependency files, got: {combined_output}"
+
+        logger.info("Correctly warned about both dependency files")
+
+    @pytest.mark.cli
+    def test_deploy_with_pyproject_toml_only(self, echo_agent_dir):
+        """
+        Test that deploy works with only pyproject.toml (no requirements.txt).
+        This test verifies the environment detection works, not full deployment.
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Copy the echo agent main.py
+            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+            # Create .gradient directory and config
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+
+            config = {
+                "agent_name": "test-echo-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+
+            with open(gradient_dir / "agent.yml", "w") as f:
+                yaml.safe_dump(config, f)
+
+            # Create pyproject.toml instead of requirements.txt
+            pyproject_content = '''[project]
+name = "test-agent"
+requires-python = ">=3.12"
+dependencies = ["gradient-adk"]
+'''
+            (temp_path / "pyproject.toml").write_text(pyproject_content)
+
+            logger.info(f"Testing deploy with pyproject.toml only in {temp_dir}")
+
+            result = subprocess.run(
+                ["gradient", "agent", "deploy", "--skip-validation", "--verbose"],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+            )
+
+            combined_output = result.stdout + result.stderr
+            # Should not fail with "no dependency file" error
+            assert "no dependency file found" not in combined_output.lower(), \
+                f"Should have detected pyproject.toml, got: {combined_output}"
+
+            logger.info("Correctly detected pyproject.toml as dependency file")
+
+    @pytest.mark.cli
+    def test_deploy_with_uv_lock(self, setup_valid_agent):
+        """
+        Test that deploy detects UV package manager from uv.lock file.
+        """
+        logger = logging.getLogger(__name__)
+        temp_path = setup_valid_agent
+
+        # Create uv.lock file
+        (temp_path / "uv.lock").write_text("# uv lock file\n")
+
+        logger.info(f"Testing deploy with uv.lock in {temp_path}")
+
+        result = subprocess.run(
+            ["gradient", "agent", "deploy", "--skip-validation", "--verbose"],
+            cwd=temp_path,
+            capture_output=True,
+            text=True,
+            timeout=30,
+            env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+        )
+
+        combined_output = result.stdout + result.stderr
+        # Should detect UV (debug message or no pip warning)
+        # The test just verifies it doesn't crash and processes uv.lock
+        assert "no dependency file found" not in combined_output.lower(), \
+            f"Should have processed with uv.lock present, got: {combined_output}"
+
+        logger.info("Correctly processed with uv.lock file")
+
+    @pytest.mark.cli
+    def test_deploy_with_tool_uv_config(self, echo_agent_dir):
+        """
+        Test that deploy detects UV package manager from [tool.uv] in pyproject.toml.
+        """
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Copy the echo agent main.py
+            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+            # Create .gradient directory and config
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+
+            config = {
+                "agent_name": "test-echo-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+
+            with open(gradient_dir / "agent.yml", "w") as f:
+                yaml.safe_dump(config, f)
+
+            # Create pyproject.toml with [tool.uv] section
+            pyproject_content = '''[project]
+name = "test-agent"
+requires-python = ">=3.12"
+dependencies = ["gradient-adk"]
+
+[tool.uv]
+dev-dependencies = []
+'''
+            (temp_path / "pyproject.toml").write_text(pyproject_content)
+
+            logger.info(f"Testing deploy with [tool.uv] in pyproject.toml in {temp_dir}")
+
+            result = subprocess.run(
+                ["gradient", "agent", "deploy", "--skip-validation", "--verbose"],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+            )
+
+            combined_output = result.stdout + result.stderr
+            # Should detect UV from [tool.uv]
+            assert "no dependency file found" not in combined_output.lower(), \
+                f"Should have processed with [tool.uv] config, got: {combined_output}"
+
+            logger.info("Correctly processed with [tool.uv] config")
+
+    @pytest.mark.cli
+    def test_deploy_json_output_python_env_error(self, echo_agent_dir):
+        """
+        Test that deploy with --output json returns valid JSON for Python env errors.
+        """
+        import json
+        logger = logging.getLogger(__name__)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+
+            # Copy the echo agent main.py
+            shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+            # Create .gradient directory and config
+            gradient_dir = temp_path / ".gradient"
+            gradient_dir.mkdir()
+
+            config = {
+                "agent_name": "test-echo-agent",
+                "agent_environment": "main",
+                "entrypoint_file": "main.py",
+            }
+
+            with open(gradient_dir / "agent.yml", "w") as f:
+                yaml.safe_dump(config, f)
+
+            # Don't create any dependency file
+
+            logger.info(f"Testing deploy --output json without dependency file in {temp_dir}")
+
+            result = subprocess.run(
+                ["gradient", "agent", "deploy", "--output", "json", "--skip-validation"],
+                cwd=temp_dir,
+                capture_output=True,
+                text=True,
+                timeout=30,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
+            )
+
+            assert result.returncode != 0, "Deploy should have failed"
+
+            # stderr should contain valid JSON error
+            try:
+                parsed = json.loads(result.stderr)
+                assert parsed["status"] == "error", f"JSON should have status: error, got: {parsed}"
+                assert "dependency" in parsed["error"].lower() or "requirements" in parsed["error"].lower(), \
+                    f"Error should mention dependency file, got: {parsed['error']}"
+                logger.info("JSON error output is valid for missing dependency file")
+            except json.JSONDecodeError:
+                pytest.fail(f"stderr should be valid JSON, got: {result.stderr}")
+
+
 class TestADKAgentsDeployE2E:
     """End-to-end tests for successful agent deployment."""
 
@@ -1019,6 +1361,247 @@ class TestADKAgentsDeployE2E:
                     f"invoke_url should contain agents.do-ai.run, got: {invoke_url}"
 
                 logger.info(f"Successfully extracted invoke_url via jq: {invoke_url}")
+        finally:
+            # Cleanup the deployed agent workspace
+            asyncio.run(self._cleanup_agent_workspace(api_token, agent_name))
+
+    @pytest.mark.cli
+    @pytest.mark.e2e
+    def test_deploy_with_pyproject_toml_e2e(self, echo_agent_dir):
+        """
+        Test successful agent deployment with pyproject.toml instead of requirements.txt.
+
+        Requires:
+        - DIGITALOCEAN_API_TOKEN or TEST_DIGITALOCEAN_API_TOKEN env var
+
+        Note: This test will deploy an agent named 'e2e-test-pyproject-{timestamp}'
+        to avoid conflicts with other tests.
+        """
+        import asyncio
+        import time
+        logger = logging.getLogger(__name__)
+
+        # Get API token
+        api_token = os.getenv("DIGITALOCEAN_API_TOKEN") or os.getenv("TEST_DIGITALOCEAN_API_TOKEN")
+
+        if not api_token:
+            pytest.skip("DIGITALOCEAN_API_TOKEN or TEST_DIGITALOCEAN_API_TOKEN required for this test")
+
+        # Use a unique agent name to avoid conflicts
+        timestamp = int(time.time())
+        agent_name = f"e2e-test-pyproject-{timestamp}"
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+
+                # Copy the echo agent main.py
+                shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+                # Create .gradient directory and config
+                gradient_dir = temp_path / ".gradient"
+                gradient_dir.mkdir()
+
+                config = {
+                    "agent_name": agent_name,
+                    "agent_environment": "main",
+                    "entrypoint_file": "main.py",
+                }
+
+                with open(gradient_dir / "agent.yml", "w") as f:
+                    yaml.safe_dump(config, f)
+
+                # Create pyproject.toml instead of requirements.txt
+                pyproject_content = '''[project]
+name = "e2e-test-agent"
+requires-python = ">=3.12"
+dependencies = ["gradient-adk"]
+'''
+                (temp_path / "pyproject.toml").write_text(pyproject_content)
+
+                logger.info(f"Testing deploy with pyproject.toml for agent {agent_name}")
+
+                result = subprocess.run(
+                    ["gradient", "agent", "deploy"],
+                    cwd=temp_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 minute timeout for deployment
+                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                )
+
+                combined_output = result.stdout + result.stderr
+
+                assert result.returncode == 0, f"Deploy should have succeeded with pyproject.toml. Output: {combined_output}"
+
+                # Check for success indicators in output
+                assert "deployed successfully" in combined_output.lower() or \
+                       "agent deployed" in combined_output.lower(), \
+                    f"Expected success message in output, got: {combined_output}"
+
+                logger.info(f"Successfully deployed agent {agent_name} with pyproject.toml")
+        finally:
+            # Cleanup the deployed agent workspace
+            asyncio.run(self._cleanup_agent_workspace(api_token, agent_name))
+
+    @pytest.mark.cli
+    @pytest.mark.e2e
+    def test_deploy_with_uv_environment_e2e(self, echo_agent_dir):
+        """
+        Test successful agent deployment with UV package manager configuration.
+
+        Requires:
+        - DIGITALOCEAN_API_TOKEN or TEST_DIGITALOCEAN_API_TOKEN env var
+
+        Note: This test will deploy an agent named 'e2e-test-uv-{timestamp}'
+        to avoid conflicts with other tests.
+        """
+        import asyncio
+        import time
+        logger = logging.getLogger(__name__)
+
+        # Get API token
+        api_token = os.getenv("DIGITALOCEAN_API_TOKEN") or os.getenv("TEST_DIGITALOCEAN_API_TOKEN")
+
+        if not api_token:
+            pytest.skip("DIGITALOCEAN_API_TOKEN or TEST_DIGITALOCEAN_API_TOKEN required for this test")
+
+        # Use a unique agent name to avoid conflicts
+        timestamp = int(time.time())
+        agent_name = f"e2e-test-uv-{timestamp}"
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+
+                # Copy the echo agent main.py
+                shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+                # Create .gradient directory and config
+                gradient_dir = temp_path / ".gradient"
+                gradient_dir.mkdir()
+
+                config = {
+                    "agent_name": agent_name,
+                    "agent_environment": "main",
+                    "entrypoint_file": "main.py",
+                }
+
+                with open(gradient_dir / "agent.yml", "w") as f:
+                    yaml.safe_dump(config, f)
+
+                # Create pyproject.toml with [tool.uv] section
+                pyproject_content = '''[project]
+name = "e2e-test-uv-agent"
+requires-python = ">=3.12"
+dependencies = ["gradient-adk"]
+
+[tool.uv]
+dev-dependencies = []
+'''
+                (temp_path / "pyproject.toml").write_text(pyproject_content)
+
+                # Create uv.lock file to indicate UV package manager
+                (temp_path / "uv.lock").write_text("# uv lock file placeholder\n")
+
+                logger.info(f"Testing deploy with UV environment for agent {agent_name}")
+
+                result = subprocess.run(
+                    ["gradient", "agent", "deploy"],
+                    cwd=temp_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 minute timeout for deployment
+                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                )
+
+                combined_output = result.stdout + result.stderr
+
+                assert result.returncode == 0, f"Deploy should have succeeded with UV config. Output: {combined_output}"
+
+                # Check for success indicators in output
+                assert "deployed successfully" in combined_output.lower() or \
+                       "agent deployed" in combined_output.lower(), \
+                    f"Expected success message in output, got: {combined_output}"
+
+                logger.info(f"Successfully deployed agent {agent_name} with UV environment")
+        finally:
+            # Cleanup the deployed agent workspace
+            asyncio.run(self._cleanup_agent_workspace(api_token, agent_name))
+
+    @pytest.mark.cli
+    @pytest.mark.e2e
+    def test_deploy_with_specific_python_version_e2e(self, echo_agent_dir):
+        """
+        Test successful agent deployment with specific Python version in .python-version file.
+
+        Requires:
+        - DIGITALOCEAN_API_TOKEN or TEST_DIGITALOCEAN_API_TOKEN env var
+
+        Note: This test will deploy an agent named 'e2e-test-pyver-{timestamp}'
+        to avoid conflicts with other tests.
+        """
+        import asyncio
+        import time
+        logger = logging.getLogger(__name__)
+
+        # Get API token
+        api_token = os.getenv("DIGITALOCEAN_API_TOKEN") or os.getenv("TEST_DIGITALOCEAN_API_TOKEN")
+
+        if not api_token:
+            pytest.skip("DIGITALOCEAN_API_TOKEN or TEST_DIGITALOCEAN_API_TOKEN required for this test")
+
+        # Use a unique agent name to avoid conflicts
+        timestamp = int(time.time())
+        agent_name = f"e2e-test-pyver-{timestamp}"
+
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                temp_path = Path(temp_dir)
+
+                # Copy the echo agent main.py
+                shutil.copy(echo_agent_dir / "main.py", temp_path / "main.py")
+
+                # Create .gradient directory and config
+                gradient_dir = temp_path / ".gradient"
+                gradient_dir.mkdir()
+
+                config = {
+                    "agent_name": agent_name,
+                    "agent_environment": "main",
+                    "entrypoint_file": "main.py",
+                }
+
+                with open(gradient_dir / "agent.yml", "w") as f:
+                    yaml.safe_dump(config, f)
+
+                # Create requirements.txt
+                (temp_path / "requirements.txt").write_text("gradient-adk\n")
+
+                # Create .python-version file with specific version
+                (temp_path / ".python-version").write_text("3.12\n")
+
+                logger.info(f"Testing deploy with .python-version for agent {agent_name}")
+
+                result = subprocess.run(
+                    ["gradient", "agent", "deploy"],
+                    cwd=temp_path,
+                    capture_output=True,
+                    text=True,
+                    timeout=600,  # 10 minute timeout for deployment
+                    env={**os.environ, "DIGITALOCEAN_API_TOKEN": api_token},
+                )
+
+                combined_output = result.stdout + result.stderr
+
+                assert result.returncode == 0, f"Deploy should have succeeded with .python-version. Output: {combined_output}"
+
+                # Check for success indicators in output
+                assert "deployed successfully" in combined_output.lower() or \
+                       "agent deployed" in combined_output.lower(), \
+                    f"Expected success message in output, got: {combined_output}"
+
+                logger.info(f"Successfully deployed agent {agent_name} with specific Python version")
         finally:
             # Cleanup the deployed agent workspace
             asyncio.run(self._cleanup_agent_workspace(api_token, agent_name))
