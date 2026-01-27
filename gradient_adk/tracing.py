@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import functools
 import inspect
+import os
 import uuid
 import json
 from copy import deepcopy
@@ -45,6 +46,12 @@ from .runtime.helpers import get_tracker
 from .runtime.network_interceptor import get_network_interceptor
 
 F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _is_tracing_disabled() -> bool:
+    """Check if tracing is globally disabled via DISABLE_TRACES env var."""
+    val = os.environ.get("DISABLE_TRACES", "").lower()
+    return val in ("true", "1", "yes")
 
 
 class SpanType(Enum):
@@ -178,6 +185,10 @@ def _trace_base(
     """
 
     def decorator(func: F) -> F:
+        # If tracing is disabled, return the original function unchanged
+        if _is_tracing_disabled():
+            return func
+
         span_name = name or func.__name__
 
         # Handle async generator functions (functions with `yield` that are async)
@@ -535,6 +546,9 @@ def add_llm_span(
             num_output_tokens=5,
         )
     """
+    if _is_tracing_disabled():
+        return
+
     tracker = get_tracker()
     if not tracker:
         return
@@ -613,6 +627,9 @@ def add_tool_span(
             tool_call_id="call_abc123",
         )
     """
+    if _is_tracing_disabled():
+        return
+
     tracker = get_tracker()
     if not tracker:
         return
@@ -669,6 +686,9 @@ def add_agent_span(
             metadata={"model": "gpt-4"},
         )
     """
+    if _is_tracing_disabled():
+        return
+
     tracker = get_tracker()
     if not tracker:
         return

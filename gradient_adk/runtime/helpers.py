@@ -18,6 +18,12 @@ from gradient_adk.digital_ocean_api import AsyncDigitalOceanGenAI
 from gradient_adk.runtime.network_interceptor import setup_digitalocean_interception
 
 
+def _is_tracing_disabled() -> bool:
+    """Check if tracing is globally disabled via DISABLE_TRACES env var."""
+    val = os.environ.get("DISABLE_TRACES", "").lower()
+    return val in ("true", "1", "yes")
+
+
 class InstrumentorProtocol(Protocol):
     """Protocol for instrumentor classes."""
 
@@ -88,6 +94,10 @@ class InstrumentorRegistry:
         self._tracker_initialized = True
 
         try:
+            # Check if tracing is globally disabled
+            if _is_tracing_disabled():
+                return None
+
             api_token = os.environ.get("DIGITALOCEAN_API_TOKEN")
             if not api_token:
                 return None

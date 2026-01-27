@@ -12,6 +12,7 @@ from gradient_adk.runtime.helpers import (
     register_all_instrumentors,
     _register_langgraph,
     _register_pydanticai,
+    _is_tracing_disabled,
 )
 
 
@@ -291,3 +292,50 @@ def test_pydanticai_availability_check():
 
     # Since we're running tests with pydantic-ai installed, it should be available
     assert check() is True
+
+
+# -----------------------------
+# DISABLE_TRACES Tests
+# -----------------------------
+
+
+def test_is_tracing_disabled_true_values():
+    """Test _is_tracing_disabled returns True for truthy env var values."""
+    for val in ["true", "TRUE", "True", "1", "yes", "YES", "Yes"]:
+        with patch.dict(os.environ, {"DISABLE_TRACES": val}):
+            assert _is_tracing_disabled() is True, f"Expected True for DISABLE_TRACES={val}"
+
+
+def test_is_tracing_disabled_false_values():
+    """Test _is_tracing_disabled returns False for falsy env var values."""
+    for val in ["false", "FALSE", "0", "no", "", "anything", "disabled"]:
+        with patch.dict(os.environ, {"DISABLE_TRACES": val}):
+            assert _is_tracing_disabled() is False, f"Expected False for DISABLE_TRACES={val}"
+
+
+def test_is_tracing_disabled_missing_var():
+    """Test _is_tracing_disabled returns False when env var is not set."""
+    with patch.dict(os.environ, {}, clear=True):
+        assert _is_tracing_disabled() is False
+
+
+def test_ensure_tracker_returns_none_when_tracing_disabled(fresh_registry):
+    """Test that _ensure_tracker returns None when DISABLE_TRACES=1, even with valid API token."""
+    with patch.dict(os.environ, {"DISABLE_TRACES": "1", "DIGITALOCEAN_API_TOKEN": "test-token"}):
+        result = fresh_registry._ensure_tracker()
+    
+    assert result is None
+    assert fresh_registry._tracker is None
+
+
+def test_install_all_returns_none_when_tracing_disabled():
+    """Test that install_all returns None and installs nothing when DISABLE_TRACES=1."""
+    test_registry = InstrumentorRegistry()
+    
+    with patch("gradient_adk.runtime.helpers.registry", test_registry):
+        with patch.dict(os.environ, {"DISABLE_TRACES": "1", "DIGITALOCEAN_API_TOKEN": "test-token"}):
+            register_all_instrumentors()
+            result = test_registry.install_all()
+    
+    assert result is None
+    assert test_registry.get_installed_names() == []

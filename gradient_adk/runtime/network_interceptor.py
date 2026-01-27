@@ -468,6 +468,11 @@ def get_network_interceptor() -> NetworkInterceptor:
 
 
 def setup_digitalocean_interception() -> None:
+    # Check if tracing is globally disabled
+    val = os.environ.get("DISABLE_TRACES", "").lower()
+    if val in ("true", "1", "yes"):
+        return
+
     intr = get_network_interceptor()
 
     # Add inference (LLM) endpoint patterns
