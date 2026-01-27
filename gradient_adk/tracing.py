@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import functools
 import inspect
-import os
 import uuid
 import json
 from copy import deepcopy
@@ -42,16 +41,10 @@ from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Tuple, TypeVar
 
 from .runtime.interfaces import NodeExecution
-from .runtime.helpers import get_tracker
+from .runtime.helpers import get_tracker, _is_tracing_disabled
 from .runtime.network_interceptor import get_network_interceptor
 
 F = TypeVar("F", bound=Callable[..., Any])
-
-
-def _is_tracing_disabled() -> bool:
-    """Check if tracing is globally disabled via DISABLE_TRACES env var."""
-    val = os.environ.get("DISABLE_TRACES", "").lower()
-    return val in ("true", "1", "yes")
 
 
 class SpanType(Enum):

@@ -469,8 +469,9 @@ def get_network_interceptor() -> NetworkInterceptor:
 
 def setup_digitalocean_interception() -> None:
     # Check if tracing is globally disabled
-    val = os.environ.get("DISABLE_TRACES", "").lower()
-    if val in ("true", "1", "yes"):
+    # Import here to avoid circular imports
+    from .helpers import _is_tracing_disabled
+    if _is_tracing_disabled():
         return
 
     intr = get_network_interceptor()
