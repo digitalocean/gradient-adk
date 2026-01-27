@@ -468,6 +468,12 @@ def get_network_interceptor() -> NetworkInterceptor:
 
 
 def setup_digitalocean_interception() -> None:
+    # Check if tracing is globally disabled
+    # Import here to avoid circular imports
+    from .helpers import _is_tracing_disabled
+    if _is_tracing_disabled():
+        return
+
     intr = get_network_interceptor()
 
     # Add inference (LLM) endpoint patterns

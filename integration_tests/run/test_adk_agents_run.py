@@ -704,3 +704,64 @@ def main(query, context):
 
         finally:
             cleanup_process(process)
+
+    @pytest.mark.cli
+    def test_agent_run_with_disable_traces(self, setup_agent_in_temp):
+        """
+        Test that an agent can run successfully with DISABLE_TRACES=1.
+        Verifies:
+        - Server starts successfully with tracing disabled
+        - Health endpoint responds
+        - /run endpoint works and echoes input
+        """
+        logger = logging.getLogger(__name__)
+        temp_dir = setup_agent_in_temp
+        port = find_free_port()
+        process = None
+
+        try:
+            logger.info(f"Starting agent with DISABLE_TRACES=1 on port {port}")
+
+            # Set up environment with DISABLE_TRACES=1
+            env = os.environ.copy()
+            env["DISABLE_TRACES"] = "1"
+
+            process = subprocess.Popen(
+                [
+                    "gradient",
+                    "agent",
+                    "run",
+                    "--port",
+                    str(port),
+                    "--no-dev",
+                ],
+                cwd=temp_dir,
+                env=env,
+                start_new_session=True,
+            )
+
+            # Wait for server to be ready
+            server_ready = wait_for_server(port, timeout=30)
+            assert server_ready, "Server did not start within timeout"
+
+            # Test health endpoint
+            health_response = requests.get(f"http://localhost:{port}/health", timeout=5)
+            assert health_response.status_code == 200
+            health_data = health_response.json()
+            assert health_data["status"] == "healthy"
+            logger.info(f"Health check passed with DISABLE_TRACES=1: {health_data}")
+
+            # Test /run endpoint
+            run_response = requests.post(
+                f"http://localhost:{port}/run",
+                json={"prompt": "Hello with tracing disabled!"},
+                timeout=10,
+            )
+            assert run_response.status_code == 200
+            run_data = run_response.json()
+            assert run_data["echo"] == "Hello with tracing disabled!"
+            assert run_data["received"]["prompt"] == "Hello with tracing disabled!"
+            logger.info(f"Agent ran successfully with DISABLE_TRACES=1: {run_data}")
+
+        finally:
+            cleanup_process(process)
