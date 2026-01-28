@@ -20,6 +20,7 @@ from gradient_adk.digital_ocean_api import (
     ToolSpanDetails,
     RetrieverSpanDetails,
     WorkflowSpanDetails,
+    AgentSpanDetails,
 )
 from .interfaces import NodeExecution
 from .network_interceptor import (
@@ -726,8 +727,11 @@ class DigitalOceanTracesTracker:
         elif metadata.get("is_agent_call"):
             span_type = TraceSpanType.TRACE_SPAN_TYPE_AGENT
 
-            # For programmatic API, only use user-provided duration_ns
-            # For decorators/automatic instrumentation, auto-calculate from start/end times
+            # Build sub-spans from the agent's collected spans
+            sub_spans_list = metadata.get("sub_spans", [])
+            sub_spans = [self._to_span(sub) for sub in sub_spans_list]
+
+            # Calculate duration from start to end
             duration_ns = metadata.get("duration_ns")
             if duration_ns is None and not metadata.get("is_programmatic"):
                 if ex.start_time and ex.end_time:
@@ -735,13 +739,17 @@ class DigitalOceanTracesTracker:
                         (ex.end_time - ex.start_time).total_seconds() * 1_000_000_000
                     )
 
-            # Build agent-specific details
-            agent_common = SpanCommon(
+            # Build common fields
+            common = SpanCommon(
                 duration_ns=duration_ns,
                 metadata=metadata.get("custom_metadata"),
                 tags=metadata.get("tags"),
                 status_code=metadata.get("status_code", 200 if ex.error is None else 500),
             )
+
+            # Use workflow field for sub-spans (API supports this for nested spans)
+            # but keep the type as AGENT
+            workflow_details = WorkflowSpanDetails(spans=sub_spans) if sub_spans else None
 
             return Span(
                 created_at=_utc(ex.start_time),
@@ -749,7 +757,8 @@ class DigitalOceanTracesTracker:
                 input=inp,
                 output=out,
                 type=span_type,
-                common=agent_common,
+                common=common,
+                workflow=workflow_details,
             )
         elif metadata.get("is_tool_call"):
             span_type = TraceSpanType.TRACE_SPAN_TYPE_TOOL

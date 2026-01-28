@@ -12,6 +12,7 @@ from gradient_adk.runtime.helpers import (
     register_all_instrumentors,
     _register_langgraph,
     _register_pydanticai,
+    _register_crewai,
     _is_tracing_disabled,
 )
 
@@ -234,8 +235,8 @@ def test_register_pydanticai_adds_to_registry():
     assert test_registry._registrations["pydanticai"]["env_disable_var"] == "GRADIENT_DISABLE_PYDANTICAI_INSTRUMENTOR"
 
 
-def test_register_all_instrumentors_registers_both():
-    """Test that register_all_instrumentors registers both frameworks."""
+def test_register_all_instrumentors_registers_all():
+    """Test that register_all_instrumentors registers all frameworks."""
     test_registry = InstrumentorRegistry()
 
     with patch("gradient_adk.runtime.helpers.registry", test_registry):
@@ -243,6 +244,19 @@ def test_register_all_instrumentors_registers_both():
 
     assert "langgraph" in test_registry._registrations
     assert "pydanticai" in test_registry._registrations
+    assert "crewai" in test_registry._registrations
+
+
+def test_register_crewai_adds_to_registry():
+    """Test that _register_crewai adds crewai to registry."""
+    test_registry = InstrumentorRegistry()
+
+    # Patch the global registry temporarily
+    with patch("gradient_adk.runtime.helpers.registry", test_registry):
+        _register_crewai()
+
+    assert "crewai" in test_registry._registrations
+    assert test_registry._registrations["crewai"]["env_disable_var"] == "GRADIENT_DISABLE_CREWAI_INSTRUMENTOR"
 
 
 # -----------------------------
@@ -292,6 +306,23 @@ def test_pydanticai_availability_check():
 
     # Since we're running tests with pydantic-ai installed, it should be available
     assert check() is True
+
+
+def test_crewai_availability_check():
+    """Test crewai availability check function."""
+    test_registry = InstrumentorRegistry()
+
+    with patch("gradient_adk.runtime.helpers.registry", test_registry):
+        _register_crewai()
+
+    check = test_registry._registrations["crewai"]["availability_check"]
+
+    # Check returns True if crewai is installed, False otherwise
+    try:
+        from crewai import Crew
+        assert check() is True
+    except ImportError:
+        assert check() is False
 
 
 # -----------------------------
