@@ -1070,7 +1070,7 @@ async def main(query, context):
             assert "deployments" in config, "Should use new deployments format"
 
             # Try deploy without --deployment-name (should work with single deployment)
-            # Note: This will fail due to missing API token, but should NOT fail
+            # Note: This will fail due to invalid API token, but should NOT fail
             # due to missing deployment name
             logger.info("Testing deploy without --deployment-name")
             result = subprocess.run(
@@ -1080,8 +1080,9 @@ async def main(query, context):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
                 cwd=temp_dir,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
             )
 
             combined_output = result.stdout + result.stderr
@@ -1161,8 +1162,9 @@ async def staging(query, context):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
                 cwd=temp_dir,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
             )
 
             assert result.returncode != 0, "Should fail without --deployment-name"
@@ -1244,8 +1246,9 @@ async def staging(query, context):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
                 cwd=temp_dir,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
             )
 
             combined_output = result.stdout + result.stderr
@@ -1304,8 +1307,9 @@ async def main(query, context):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
                 cwd=temp_dir,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
             )
 
             assert result.returncode != 0, "Should fail with non-existent deployment"
@@ -1360,8 +1364,9 @@ async def main(query, context):
                 ],
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=30,
                 cwd=temp_dir,
+                env={**os.environ, "DIGITALOCEAN_API_TOKEN": "test-token"},
             )
 
             combined_output = result.stdout + result.stderr
