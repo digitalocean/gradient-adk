@@ -1,7 +1,7 @@
 from __future__ import annotations
 import re
 from pathlib import Path
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 import typer
 import yaml
 
@@ -179,23 +179,104 @@ class YamlAgentConfigManager(AgentConfigManager):
         entrypoint_file: str,
         description: Optional[str] = None,
     ) -> None:
-        """Save configuration to YAML file."""
+        """Save configuration to YAML file using new deployments format."""
+        # Build deployment-specific config
+        deployment_config: Dict[str, Any] = {"entrypoint_file": entrypoint_file}
+        if description is not None:
+            deployment_config["description"] = description
+
+        # Use new deployments format
         config = {
             "agent_name": agent_name,
-            "agent_environment": agent_environment,
-            "entrypoint_file": entrypoint_file,
+            "deployments": {
+                agent_environment: deployment_config,
+            },
         }
-
-        # Only include description if provided
-        if description is not None:
-            config["description"] = description
 
         try:
             with open(self.config_file, "w") as f:
                 yaml.safe_dump(config, f, default_flow_style=False)
             typer.echo(f"✅ Configuration saved to {self.config_file}")
             typer.echo(f"  Agent workspace name: {agent_name}")
-            typer.echo(f"  Agent deployment name: {agent_environment}")
+            typer.echo(f"  Deployment: {agent_environment}")
+            typer.echo(f"  Entrypoint: {entrypoint_file}")
+            if description:
+                typer.echo(f"  Description: {description[:50]}{'...' if len(description) > 50 else ''}")
+        except Exception as e:
+            typer.echo(f"Error writing configuration file: {e}", err=True)
+            raise typer.Exit(1)
+
+    # Multi-deployment support methods
+
+    def get_deployment_names(self) -> List[str]:
+        """Get list of deployment names from the deployments section.
+
+        Returns empty list if no deployments section exists (old format).
+        """
+        config = self.load_config()
+        if not config:
+            return []
+        deployments = config.get("deployments", {})
+        return list(deployments.keys()) if isinstance(deployments, dict) else []
+
+    def get_config_for_deployment(self, deployment_name: str) -> Optional[Dict[str, Any]]:
+        """Get merged config for a specific deployment.
+
+        The deployment name becomes the agent_environment.
+        Returns None if deployment not found.
+        """
+        config = self.load_config()
+        if not config:
+            return None
+        deployments = config.get("deployments", {})
+        if not isinstance(deployments, dict) or deployment_name not in deployments:
+            return None
+
+        # Start with agent_name from top-level
+        merged: Dict[str, Any] = {"agent_name": config.get("agent_name")}
+        # Add deployment-specific values
+        merged.update(deployments[deployment_name])
+        # The deployment name IS the agent_environment
+        merged["agent_environment"] = deployment_name
+        return merged
+
+    def add_deployment(
+        self,
+        deployment_name: str,
+        entrypoint_file: str,
+        description: Optional[str] = None,
+    ) -> None:
+        """Add a deployment to the deployments section."""
+        # Validate deployment name
+        if not self._validate_name(deployment_name):
+            typer.echo(
+                f"Error: Deployment name '{deployment_name}' is invalid. "
+                "It can only contain alphanumeric characters, hyphens, and underscores.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
+        # Validate entrypoint file
+        self._validate_entrypoint_file(entrypoint_file)
+
+        config = self.load_config() or {}
+
+        # Initialize deployments section if needed
+        if "deployments" not in config:
+            config["deployments"] = {}
+
+        # Build deployment config
+        deployment_config: Dict[str, Any] = {"entrypoint_file": entrypoint_file}
+        if description is not None:
+            deployment_config["description"] = description
+
+        # Add/update the deployment
+        config["deployments"][deployment_name] = deployment_config
+
+        try:
+            with open(self.config_file, "w") as f:
+                yaml.safe_dump(config, f, default_flow_style=False)
+            typer.echo(f"✅ Added deployment '{deployment_name}' to {self.config_file}")
             typer.echo(f"  Entrypoint: {entrypoint_file}")
             if description:
                 typer.echo(f"  Description: {description[:50]}{'...' if len(description) > 50 else ''}")
