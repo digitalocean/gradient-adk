@@ -246,8 +246,29 @@ def agent_configure(
     interactive: bool = typer.Option(
         True, "--interactive/--no-interactive", help="Interactive prompt mode"
     ),
+    add_deployment: Optional[str] = typer.Option(
+        None,
+        "--add-deployment",
+        help="Add a named deployment to existing config (requires --entrypoint-file)",
+    ),
 ):
     """Configure agent settings in config.yaml for an existing project."""
+    # Handle --add-deployment: adds a deployment to existing config
+    if add_deployment:
+        if not entrypoint_file:
+            typer.echo(
+                "Error: --add-deployment requires --entrypoint-file to be specified.",
+                err=True,
+            )
+            raise typer.Exit(1)
+        _agent_config_manager.add_deployment(
+            deployment_name=add_deployment,
+            entrypoint_file=entrypoint_file,
+            description=description,
+        )
+        return
+
+    # Normal configure flow
     _configure_agent(
         agent_name=agent_name,
         deployment_name=deployment_name,
@@ -315,6 +336,11 @@ def agent_deploy(
         "-o",
         help="Output format (text or json)",
     ),
+    deployment_name: Optional[str] = typer.Option(
+        None,
+        "--deployment-name",
+        help="Deployment name (required if multiple deployments configured)",
+    ),
 ):
     """Deploy the agent to DigitalOcean."""
     import asyncio
@@ -341,10 +367,47 @@ def agent_deploy(
         typer.echo()
 
     try:
-        # Get configuration
-        agent_workspace_name = _agent_config_manager.get_agent_name()
-        agent_deployment_name = _agent_config_manager.get_agent_environment()
-        entrypoint_file = _agent_config_manager.get_entrypoint_file()
+        # Get configuration - handle both old and new formats
+        deployment_names = _agent_config_manager.get_deployment_names()
+        description: Optional[str] = None
+
+        if deployment_names:
+            # NEW FORMAT: has deployments section
+            if len(deployment_names) == 1 and deployment_name is None:
+                # Auto-select single deployment
+                deployment_name = deployment_names[0]
+            elif len(deployment_names) > 1 and deployment_name is None:
+                # Multiple deployments - require flag
+                error_msg = "Multiple deployments configured. Specify one with --deployment-name."
+                if json_output:
+                    output_json_error(error_msg)
+                typer.echo("❌ Multiple deployments configured.", err=True)
+                typer.echo("\nSpecify one with --deployment-name:", err=True)
+                for name in deployment_names:
+                    typer.echo(f"  - {name}", err=True)
+                raise typer.Exit(1)
+
+            config = _agent_config_manager.get_config_for_deployment(deployment_name)
+            if config is None:
+                error_msg = f"Deployment '{deployment_name}' not found."
+                if json_output:
+                    output_json_error(error_msg)
+                typer.echo(f"❌ Deployment '{deployment_name}' not found.", err=True)
+                typer.echo("\nAvailable deployments:", err=True)
+                for name in deployment_names:
+                    typer.echo(f"  - {name}", err=True)
+                raise typer.Exit(1)
+
+            agent_workspace_name = config.get("agent_name")
+            agent_deployment_name = config.get("agent_environment")
+            entrypoint_file = config.get("entrypoint_file")
+            description = config.get("description")
+        else:
+            # OLD FORMAT: no deployments section (backwards compat)
+            agent_workspace_name = _agent_config_manager.get_agent_name()
+            agent_deployment_name = _agent_config_manager.get_agent_environment()
+            entrypoint_file = _agent_config_manager.get_entrypoint_file()
+            description = _agent_config_manager.get_description()
 
         # Check if configuration exists
         if not agent_workspace_name or not agent_deployment_name or not entrypoint_file:
@@ -460,9 +523,6 @@ def agent_deploy(
                         "  https://cloud.digitalocean.com/account/api/tokens", err=True
                     )
                     raise typer.Exit(1)
-
-                # Get description from config (optional)
-                description = _agent_config_manager.get_description()
 
                 # Create deploy service with injected client
                 deploy_service = AgentDeployService(client=client, quiet=json_output)
