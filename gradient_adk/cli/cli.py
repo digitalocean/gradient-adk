@@ -477,7 +477,7 @@ def agent_deploy(
                     description=description,
                 )
 
-                invoke_url = f"https://agents.do-ai.run/{workspace_uuid}/{agent_deployment_name}/run"
+                invoke_url = f"https://agents.do-ai.run/v1/{workspace_uuid}/{agent_deployment_name}/run"
 
                 if json_output:
                     output_json({
