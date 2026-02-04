@@ -6,7 +6,23 @@
 [![PyPI version](https://img.shields.io/pypi/v/gradient-adk.svg?label=pypi%20(stable))](https://pypi.org/project/gradient-adk/)
 [![Docs](https://img.shields.io/badge/Docs-8A2BE2)](https://docs.digitalocean.com/products/gradient-ai-platform/)
 
-The Gradient™ Agent Development Kit (ADK) is a comprehensive toolkit for building, testing, deploying, and evaluating AI agents on DigitalOcean's Gradient™ AI Platform. It provides both a **CLI** for development workflows and a **runtime environment** for hosting agents with automatic trace capture.
+The Gradient™ Agent Development Kit (ADK) is a Python toolkit designed to help you build, deploy, and operate production-grade AI agents with zero infrastructure overhead.
+
+Building AI agents is challenging enough without worrying about observability, evaluations, and deployment infrastructure. We built the Gradient ADK with one simple aim: **bring your agent code, and we handle the rest**—bringing the simplicity you love about DigitalOcean to AI agents.
+
+## Why Use Gradient ADK?
+
+- **Framework Agnostic**: Bring your existing agent code—whether built with LangGraph, LangChain, CrewAI, PydanticAI, or any Python framework. No rewrites, no lock-in.
+
+- **Pay Per Use**: Only pay for what you use with serverless agent hosting. **Currently provided at no compute cost during Public Preview!**
+
+- **Any LLM Provider**: Use OpenAI, Anthropic, Google, or DigitalOcean's own Gradient AI serverless inference—your choice, your keys.
+
+- **Built-in Observability**: Get automatic traces, evaluations, and insights out of the box. No OpenTelemetry setup, no third-party integrations required.
+
+- **Production Ready from Day One**: Deploy with a single command to DigitalOcean's managed infrastructure. Focus on building your agent, not managing servers.
+
+- **Seamless DigitalOcean Integration**: Connect effortlessly to the DigitalOcean ecosystem—Knowledge Bases for RAG, Serverless Inference for LLMs, built-in Evaluations, and more.
 
 ## Features
 
