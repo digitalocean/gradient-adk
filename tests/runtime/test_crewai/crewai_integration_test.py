@@ -7,6 +7,7 @@ spans are correctly captured, nested, and classified.
 import pytest
 import os
 import sys
+import time
 from unittest.mock import MagicMock, patch
 from pathlib import Path
 
@@ -22,14 +23,9 @@ pytestmark = pytest.mark.integration
 # -----------------------------
 
 
-@pytest.fixture
-def mock_tracker():
-    """Create a mock tracker to capture spans."""
-    tracker = MagicMock()
-    tracker.on_node_start = MagicMock()
-    tracker.on_node_end = MagicMock()
-    tracker.on_node_error = MagicMock()
-    return tracker
+# Note: mock_tracker, clear_agent_stack, and integration_instrumentor fixtures
+# are provided by conftest.py to ensure a single instrumentor installation
+# across all test files (preventing handler accumulation on CrewAI's event bus).
 
 
 @pytest.fixture
@@ -55,29 +51,12 @@ def patch_network_interceptor(mock_interceptor):
             yield mock_interceptor
 
 
-@pytest.fixture(autouse=True)
-def clear_agent_stack():
-    """Clear the agent stack before and after each test."""
-    from gradient_adk.runtime.crewai.crewai_instrumentor import (
-        _agent_stack,
-        _agent_stack_lock,
-    )
-    with _agent_stack_lock:
-        _agent_stack.clear()
-    yield
-    with _agent_stack_lock:
-        _agent_stack.clear()
-
-
 @pytest.fixture
-def instrumentor(mock_tracker):
-    """Create and install an instrumentor."""
-    from gradient_adk.runtime.crewai.crewai_instrumentor import CrewAIInstrumentor
-
-    inst = CrewAIInstrumentor()
-    inst.install(mock_tracker)
-    yield inst
-    inst.uninstall()
+def instrumentor(mock_tracker, shared_instrumentor, shared_delegating_tracker):
+    """Per-test instrumentor wired to this test's mock_tracker."""
+    shared_delegating_tracker.set_delegate(mock_tracker)
+    yield shared_instrumentor
+    shared_delegating_tracker.set_delegate(None)
 
 
 # -----------------------------
@@ -103,6 +82,112 @@ def get_all_spans(tracker):
     return spans
 
 
+def wait_for_event_bus(delay: float = 0.05):
+    """Wait for the CrewAI event bus to process handlers.
+
+    Uses flush() to properly wait for all pending handlers to complete,
+    which is more reliable than a fixed sleep when the thread pool is busy.
+    """
+    from crewai.events import crewai_event_bus
+    crewai_event_bus.flush(timeout=5.0)
+    time.sleep(delay)
+
+
+def make_real_event(event_class, **kwargs):
+    """Create a real CrewAI event instance.
+
+    CrewAI's event bus uses isinstance checks, so we need to create
+    actual event instances rather than mocks. We use model_construct
+    to bypass Pydantic validation since we're using mock objects for
+    agent and task.
+    """
+    from datetime import datetime, timezone
+    from crewai.events import (
+        AgentExecutionStartedEvent,
+        AgentExecutionCompletedEvent,
+        AgentExecutionErrorEvent,
+        LLMCallStartedEvent,
+        LLMCallCompletedEvent,
+        ToolUsageStartedEvent,
+        ToolUsageFinishedEvent,
+    )
+
+    # Import optional event types
+    LLMCallFailedEvent = None
+    ToolUsageErrorEvent = None
+    try:
+        from crewai.events import LLMCallFailedEvent
+    except ImportError:
+        pass
+    try:
+        from crewai.events import ToolUsageErrorEvent
+    except ImportError:
+        pass
+
+    # Build required args based on event type
+    if event_class == AgentExecutionStartedEvent:
+        defaults = {
+            "agent": kwargs.pop("agent", MagicMock()),
+            "task": kwargs.pop("task", MagicMock()),
+            "tools": kwargs.pop("tools", []),
+            "task_prompt": kwargs.pop("task_prompt", "Test task prompt"),
+        }
+    elif event_class == AgentExecutionCompletedEvent:
+        defaults = {
+            "agent": kwargs.pop("agent", MagicMock()),
+            "task": kwargs.pop("task", MagicMock()),
+            "output": kwargs.pop("output", "Test output"),
+        }
+    elif event_class == AgentExecutionErrorEvent:
+        defaults = {
+            "agent": kwargs.pop("agent", MagicMock()),
+            "task": kwargs.pop("task", MagicMock()),
+            "error": kwargs.pop("error", "Test error"),
+        }
+    elif event_class == LLMCallStartedEvent:
+        defaults = {
+            "model": kwargs.pop("model", "gpt-4"),
+            "messages": kwargs.pop("messages", []),
+        }
+    elif event_class == LLMCallCompletedEvent:
+        defaults = {
+            "response": kwargs.pop("response", "Test response"),
+            "call_type": kwargs.pop("call_type", "completion"),
+        }
+    elif LLMCallFailedEvent is not None and event_class == LLMCallFailedEvent:
+        defaults = {
+            "error": kwargs.pop("error", "LLM call failed"),
+        }
+    elif event_class == ToolUsageStartedEvent:
+        defaults = {
+            "tool_name": kwargs.pop("tool_name", "test_tool"),
+            "tool_args": kwargs.pop("tool_args", kwargs.pop("tool_input", {})),
+        }
+    elif event_class == ToolUsageFinishedEvent:
+        now = datetime.now(timezone.utc)
+        defaults = {
+            "tool_name": kwargs.pop("tool_name", "test_tool"),
+            "tool_args": kwargs.pop("tool_args", kwargs.pop("tool_input", {})),
+            "started_at": kwargs.pop("started_at", now),
+            "finished_at": kwargs.pop("finished_at", now),
+            "output": kwargs.pop("output", "Test output"),
+        }
+    elif ToolUsageErrorEvent is not None and event_class == ToolUsageErrorEvent:
+        defaults = {
+            "tool_name": kwargs.pop("tool_name", "test_tool"),
+            "tool_args": kwargs.pop("tool_args", kwargs.pop("tool_input", {})),
+            "error": kwargs.pop("error", "Tool error"),
+        }
+    else:
+        defaults = {}
+
+    # Merge with any remaining kwargs
+    defaults.update(kwargs)
+
+    # Use model_construct to bypass Pydantic validation for mock objects
+    return event_class.model_construct(**defaults)
+
+
 # -----------------------------
 # Basic Instrumentation Tests
 # -----------------------------
@@ -111,17 +196,14 @@ def get_all_spans(tracker):
 class TestBasicInstrumentation:
     """Test basic instrumentation functionality."""
 
-    def test_instrumentor_installs_successfully(self, mock_tracker):
-        """Test that the instrumentor installs without errors."""
-        from gradient_adk.runtime.crewai.crewai_instrumentor import CrewAIInstrumentor
+    def test_instrumentor_installs_successfully(self, instrumentor):
+        """Test that the instrumentor installs without errors.
 
-        inst = CrewAIInstrumentor()
-        inst.install(mock_tracker)
-        
-        assert inst.is_installed()
-        
-        inst.uninstall()
-        assert not inst.is_installed()
+        Note: We use the module-scoped instrumentor fixture to avoid
+        registering duplicate handlers on CrewAI's event bus, which
+        doesn't support handler removal.
+        """
+        assert instrumentor.is_installed()
 
     def test_instrumentor_registers_event_handlers(self, instrumentor, mock_tracker):
         """Test that event handlers are registered."""
@@ -187,7 +269,6 @@ class TestSingleAgentCrew:
 
     def test_single_agent_mocked_llm(self, instrumentor, mock_tracker):
         """Test single agent with mocked LLM for offline testing."""
-        from crewai import Agent, Task, Crew, Process
         from crewai.events import (
             crewai_event_bus,
             AgentExecutionStartedEvent,
@@ -199,30 +280,28 @@ class TestSingleAgentCrew:
         # Simulate agent execution via events
         agent_mock = MagicMock()
         agent_mock.role = "TestAgent"
-        
+
         task_mock = MagicMock()
         task_mock.description = "Test task"
 
         # Agent start
-        start_event = MagicMock(spec=AgentExecutionStartedEvent)
-        start_event.agent = agent_mock
-        start_event.task = task_mock
+        start_event = make_real_event(AgentExecutionStartedEvent, agent=agent_mock, task=task_mock)
         crewai_event_bus.emit(start_event, start_event)
+        wait_for_event_bus()
 
         # LLM call
-        llm_start = MagicMock(spec=LLMCallStartedEvent)
-        llm_start.model = "test-model"
-        llm_start.messages = [{"role": "user", "content": "test"}]
+        llm_start = make_real_event(LLMCallStartedEvent, model="test-model", messages=[{"role": "user", "content": "test"}])
         crewai_event_bus.emit(llm_start, llm_start)
+        wait_for_event_bus()
 
-        llm_complete = MagicMock(spec=LLMCallCompletedEvent)
-        llm_complete.response = "Test response"
+        llm_complete = make_real_event(LLMCallCompletedEvent, response="Test response")
         crewai_event_bus.emit(llm_complete, llm_complete)
+        wait_for_event_bus()
 
         # Agent complete
-        complete_event = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete_event.output = "Task completed"
+        complete_event = make_real_event(AgentExecutionCompletedEvent, output="Task completed")
         crewai_event_bus.emit(complete_event, complete_event)
+        wait_for_event_bus()
 
         # Verify spans
         workflow_spans = get_workflow_spans(mock_tracker)
@@ -262,14 +341,13 @@ class TestMultiAgentCrew:
         task1 = MagicMock()
         task1.description = "Research"
 
-        start1 = MagicMock(spec=AgentExecutionStartedEvent)
-        start1.agent = agent1
-        start1.task = task1
+        start1 = make_real_event(AgentExecutionStartedEvent, agent=agent1, task=task1)
         crewai_event_bus.emit(start1, start1)
+        wait_for_event_bus()
 
-        complete1 = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete1.output = "Research complete"
+        complete1 = make_real_event(AgentExecutionCompletedEvent, output="Research complete")
         crewai_event_bus.emit(complete1, complete1)
+        wait_for_event_bus()
 
         # Second agent
         agent2 = MagicMock()
@@ -277,14 +355,13 @@ class TestMultiAgentCrew:
         task2 = MagicMock()
         task2.description = "Write"
 
-        start2 = MagicMock(spec=AgentExecutionStartedEvent)
-        start2.agent = agent2
-        start2.task = task2
+        start2 = make_real_event(AgentExecutionStartedEvent, agent=agent2, task=task2)
         crewai_event_bus.emit(start2, start2)
+        wait_for_event_bus()
 
-        complete2 = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete2.output = "Writing complete"
+        complete2 = make_real_event(AgentExecutionCompletedEvent, output="Writing complete")
         crewai_event_bus.emit(complete2, complete2)
+        wait_for_event_bus()
 
         # Verify two workflow spans
         workflow_spans = get_workflow_spans(mock_tracker)
@@ -347,25 +424,23 @@ class TestToolInstrumentation:
         task = MagicMock()
         task.description = "Use tools"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
         # Tool call
-        tool_start = MagicMock(spec=ToolUsageStartedEvent)
-        tool_start.tool_name = "web_search"
-        tool_start.tool_input = {"query": "test query"}
+        tool_start = make_real_event(ToolUsageStartedEvent, tool_name="web_search", tool_input={"query": "test query"})
         crewai_event_bus.emit(tool_start, tool_start)
+        wait_for_event_bus()
 
-        tool_finish = MagicMock(spec=ToolUsageFinishedEvent)
-        tool_finish.output = {"results": ["result1"]}
+        tool_finish = make_real_event(ToolUsageFinishedEvent, tool_name="web_search", output={"results": ["result1"]})
         crewai_event_bus.emit(tool_finish, tool_finish)
+        wait_for_event_bus()
 
         # Complete agent
-        complete = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete.output = "Done"
+        complete = make_real_event(AgentExecutionCompletedEvent, output="Done")
         crewai_event_bus.emit(complete, complete)
+        wait_for_event_bus()
 
         # Verify tool span
         workflow_spans = get_workflow_spans(mock_tracker)
@@ -373,7 +448,7 @@ class TestToolInstrumentation:
 
         sub_spans = workflow_spans[0].metadata.get("sub_spans", [])
         tool_spans = [s for s in sub_spans if s.metadata.get("is_tool_call")]
-        
+
         assert len(tool_spans) == 1
         assert tool_spans[0].node_name == "web_search"
         assert tool_spans[0].inputs == {"query": "test query"}
@@ -395,31 +470,29 @@ class TestToolInstrumentation:
         task = MagicMock()
         task.description = "Use tools"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
         # Tool call with error
-        tool_start = MagicMock(spec=ToolUsageStartedEvent)
-        tool_start.tool_name = "failing_tool"
-        tool_start.tool_input = {"arg": "value"}
+        tool_start = make_real_event(ToolUsageStartedEvent, tool_name="failing_tool", tool_input={"arg": "value"})
         crewai_event_bus.emit(tool_start, tool_start)
+        wait_for_event_bus()
 
-        tool_error = MagicMock(spec=ToolUsageErrorEvent)
-        tool_error.error = "Tool execution failed"
+        tool_error = make_real_event(ToolUsageErrorEvent, tool_name="failing_tool", error="Tool execution failed")
         crewai_event_bus.emit(tool_error, tool_error)
+        wait_for_event_bus()
 
         # Complete agent
-        complete = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete.output = "Done with errors"
+        complete = make_real_event(AgentExecutionCompletedEvent, output="Done with errors")
         crewai_event_bus.emit(complete, complete)
+        wait_for_event_bus()
 
         # Verify error span
         workflow_spans = get_workflow_spans(mock_tracker)
         sub_spans = workflow_spans[0].metadata.get("sub_spans", [])
         tool_spans = [s for s in sub_spans if s.node_name == "failing_tool"]
-        
+
         assert len(tool_spans) == 1
         assert tool_spans[0].error == "Tool execution failed"
 
@@ -445,14 +518,13 @@ class TestErrorHandling:
         task = MagicMock()
         task.description = "Fail"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
-        error = MagicMock(spec=AgentExecutionErrorEvent)
-        error.error = "Agent execution failed"
+        error = make_real_event(AgentExecutionErrorEvent, error="Agent execution failed")
         crewai_event_bus.emit(error, error)
+        wait_for_event_bus()
 
         # Verify error was reported
         assert mock_tracker.on_node_error.call_count >= 1
@@ -472,29 +544,27 @@ class TestErrorHandling:
         task = MagicMock()
         task.description = "Task"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
-        llm_start = MagicMock(spec=LLMCallStartedEvent)
-        llm_start.model = "test-model"
-        llm_start.messages = []
+        llm_start = make_real_event(LLMCallStartedEvent, model="test-model", messages=[])
         crewai_event_bus.emit(llm_start, llm_start)
+        wait_for_event_bus()
 
-        llm_fail = MagicMock(spec=LLMCallFailedEvent)
-        llm_fail.error = "LLM call failed"
+        llm_fail = make_real_event(LLMCallFailedEvent, error="LLM call failed")
         crewai_event_bus.emit(llm_fail, llm_fail)
+        wait_for_event_bus()
 
-        complete = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete.output = "Done"
+        complete = make_real_event(AgentExecutionCompletedEvent, output="Done")
         crewai_event_bus.emit(complete, complete)
+        wait_for_event_bus()
 
         # Verify LLM error span
         workflow_spans = get_workflow_spans(mock_tracker)
         sub_spans = workflow_spans[0].metadata.get("sub_spans", [])
         error_spans = [s for s in sub_spans if s.error]
-        
+
         assert len(error_spans) >= 1
 
 
@@ -519,14 +589,13 @@ class TestSpanMetadata:
         task = MagicMock()
         task.description = "Test"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
-        complete = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete.output = "Done"
+        complete = make_real_event(AgentExecutionCompletedEvent, output="Done")
         crewai_event_bus.emit(complete, complete)
+        wait_for_event_bus()
 
         workflow_spans = get_workflow_spans(mock_tracker)
         assert len(workflow_spans) == 1
@@ -547,28 +616,26 @@ class TestSpanMetadata:
         task = MagicMock()
         task.description = "Task"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
-        llm_start = MagicMock(spec=LLMCallStartedEvent)
-        llm_start.model = "gpt-4"
-        llm_start.messages = []
+        llm_start = make_real_event(LLMCallStartedEvent, model="gpt-4", messages=[])
         crewai_event_bus.emit(llm_start, llm_start)
+        wait_for_event_bus()
 
-        llm_complete = MagicMock(spec=LLMCallCompletedEvent)
-        llm_complete.response = "Response"
+        llm_complete = make_real_event(LLMCallCompletedEvent, response="Response")
         crewai_event_bus.emit(llm_complete, llm_complete)
+        wait_for_event_bus()
 
-        complete = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete.output = "Done"
+        complete = make_real_event(AgentExecutionCompletedEvent, output="Done")
         crewai_event_bus.emit(complete, complete)
+        wait_for_event_bus()
 
         workflow_spans = get_workflow_spans(mock_tracker)
         sub_spans = workflow_spans[0].metadata.get("sub_spans", [])
         llm_spans = [s for s in sub_spans if s.metadata.get("is_llm_call")]
-        
+
         assert len(llm_spans) >= 1
 
     def test_tool_span_has_is_tool_call_flag(self, instrumentor, mock_tracker):
@@ -586,28 +653,26 @@ class TestSpanMetadata:
         task = MagicMock()
         task.description = "Task"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
-        tool_start = MagicMock(spec=ToolUsageStartedEvent)
-        tool_start.tool_name = "test_tool"
-        tool_start.tool_input = {}
+        tool_start = make_real_event(ToolUsageStartedEvent, tool_name="test_tool", tool_input={})
         crewai_event_bus.emit(tool_start, tool_start)
+        wait_for_event_bus()
 
-        tool_finish = MagicMock(spec=ToolUsageFinishedEvent)
-        tool_finish.output = "result"
+        tool_finish = make_real_event(ToolUsageFinishedEvent, tool_name="test_tool", output="result")
         crewai_event_bus.emit(tool_finish, tool_finish)
+        wait_for_event_bus()
 
-        complete = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete.output = "Done"
+        complete = make_real_event(AgentExecutionCompletedEvent, output="Done")
         crewai_event_bus.emit(complete, complete)
+        wait_for_event_bus()
 
         workflow_spans = get_workflow_spans(mock_tracker)
         sub_spans = workflow_spans[0].metadata.get("sub_spans", [])
         tool_spans = [s for s in sub_spans if s.metadata.get("is_tool_call")]
-        
+
         assert len(tool_spans) >= 1
         assert tool_spans[0].metadata.get("tool_name") == "test_tool"
 
@@ -624,18 +689,17 @@ class TestSpanMetadata:
         task = MagicMock()
         task.description = "Task"
 
-        start = MagicMock(spec=AgentExecutionStartedEvent)
-        start.agent = agent
-        start.task = task
+        start = make_real_event(AgentExecutionStartedEvent, agent=agent, task=task)
         crewai_event_bus.emit(start, start)
+        wait_for_event_bus()
 
-        complete = MagicMock(spec=AgentExecutionCompletedEvent)
-        complete.output = "Done"
+        complete = make_real_event(AgentExecutionCompletedEvent, output="Done")
         crewai_event_bus.emit(complete, complete)
+        wait_for_event_bus()
 
         workflow_spans = get_workflow_spans(mock_tracker)
         assert len(workflow_spans) == 1
-        
+
         span = workflow_spans[0]
         assert span.start_time is not None
         assert span.end_time is not None
