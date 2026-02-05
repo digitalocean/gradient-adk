@@ -262,20 +262,57 @@ class CrewAIInstrumentor:
 
         try:
             from crewai.events import crewai_event_bus
-            from crewai.events import (
-                AgentExecutionStartedEvent,
-                AgentExecutionCompletedEvent,
-                AgentExecutionErrorEvent,
-                LLMCallStartedEvent,
-                LLMCallCompletedEvent,
-                LLMCallFailedEvent,
-                ToolUsageStartedEvent,
-                ToolUsageFinishedEvent,
-                ToolUsageErrorEvent,
-            )
         except ImportError:
             # CrewAI not installed or doesn't have events module
             return
+
+        # Import event types individually - not all may exist in every CrewAI version
+        AgentExecutionStartedEvent = None
+        AgentExecutionCompletedEvent = None
+        AgentExecutionErrorEvent = None
+        LLMCallStartedEvent = None
+        LLMCallCompletedEvent = None
+        LLMCallFailedEvent = None
+        ToolUsageStartedEvent = None
+        ToolUsageFinishedEvent = None
+        ToolUsageErrorEvent = None
+
+        try:
+            from crewai.events import AgentExecutionStartedEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import AgentExecutionCompletedEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import AgentExecutionErrorEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import LLMCallStartedEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import LLMCallCompletedEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import LLMCallFailedEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import ToolUsageStartedEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import ToolUsageFinishedEvent
+        except ImportError:
+            pass
+        try:
+            from crewai.events import ToolUsageErrorEvent
+        except ImportError:
+            pass
 
         t = tracker  # close over
 
@@ -419,261 +456,270 @@ class CrewAIInstrumentor:
 
         # ---- Agent Event Handlers ----
 
-        @crewai_event_bus.on(AgentExecutionStartedEvent)
-        def on_agent_started(source, event):
-            """Handle agent execution start."""
-            try:
-                agent = getattr(event, "agent", None)
-                agent_role = getattr(agent, "role", "Agent") if agent else "Agent"
+        if AgentExecutionStartedEvent is not None:
+            @crewai_event_bus.on(AgentExecutionStartedEvent)
+            def on_agent_started(source, event):
+                """Handle agent execution start."""
+                try:
+                    agent = getattr(event, "agent", None)
+                    agent_role = getattr(agent, "role", "Agent") if agent else "Agent"
 
-                # Get task info if available
-                task = getattr(event, "task", None)
-                task_description = getattr(task, "description", "") if task else ""
+                    # Get task info if available
+                    task = getattr(event, "task", None)
+                    task_description = getattr(task, "description", "") if task else ""
 
-                node_name = f"agent:{agent_role}"
-                inputs_snapshot = _freeze({"task": task_description}) if task_description else {}
+                    node_name = f"agent:{agent_role}"
+                    inputs_snapshot = _freeze({"task": task_description}) if task_description else {}
 
-                agent_node = _mk_exec(node_name, inputs_snapshot)
-                meta = _ensure_meta(agent_node)
-                meta["is_workflow"] = True  # Use workflow span to enable sub-span rendering
-                meta["agent_role"] = agent_role
+                    agent_node = _mk_exec(node_name, inputs_snapshot)
+                    meta = _ensure_meta(agent_node)
+                    meta["is_workflow"] = True  # Use workflow span to enable sub-span rendering
+                    meta["agent_role"] = agent_role
 
-                # Create agent context and push onto stack
-                agent_ctx = AgentContext(
-                    node=agent_node,
-                    agent_role=agent_role,
-                )
-                _push_agent(agent_ctx)
-            except Exception:
-                pass
+                    # Create agent context and push onto stack
+                    agent_ctx = AgentContext(
+                        node=agent_node,
+                        agent_role=agent_role,
+                    )
+                    _push_agent(agent_ctx)
+                except Exception:
+                    pass
 
-        @crewai_event_bus.on(AgentExecutionCompletedEvent)
-        def on_agent_completed(source, event):
-            """Handle agent execution completion."""
-            try:
-                agent_ctx = _pop_agent()
-                if agent_ctx is None:
-                    return
+        if AgentExecutionCompletedEvent is not None:
+            @crewai_event_bus.on(AgentExecutionCompletedEvent)
+            def on_agent_completed(source, event):
+                """Handle agent execution completion."""
+                try:
+                    agent_ctx = _pop_agent()
+                    if agent_ctx is None:
+                        return
 
-                agent_node = agent_ctx.node
-                agent_node.end_time = _utc()
+                    agent_node = agent_ctx.node
+                    agent_node.end_time = _utc()
 
-                # Extract output from event
-                output = getattr(event, "output", None)
-                if output is not None:
-                    agent_node.outputs = {"output": _freeze(output)}
-                else:
-                    agent_node.outputs = {}
+                    # Extract output from event
+                    output = getattr(event, "output", None)
+                    if output is not None:
+                        agent_node.outputs = {"output": _freeze(output)}
+                    else:
+                        agent_node.outputs = {}
 
-                # Store sub-spans in metadata
-                meta = _ensure_meta(agent_node)
-                meta["sub_spans"] = agent_ctx.sub_spans
+                    # Store sub-spans in metadata
+                    meta = _ensure_meta(agent_node)
+                    meta["sub_spans"] = agent_ctx.sub_spans
 
-                # Report the agent span to the tracker
-                t.on_node_start(agent_node)
-                t.on_node_end(agent_node, agent_node.outputs)
-            except Exception:
-                pass
+                    # Report the agent span to the tracker
+                    t.on_node_start(agent_node)
+                    t.on_node_end(agent_node, agent_node.outputs)
+                except Exception:
+                    pass
 
-        @crewai_event_bus.on(AgentExecutionErrorEvent)
-        def on_agent_error(source, event):
-            """Handle agent execution error."""
-            try:
-                agent_ctx = _pop_agent()
-                if agent_ctx is None:
-                    return
+        if AgentExecutionErrorEvent is not None:
+            @crewai_event_bus.on(AgentExecutionErrorEvent)
+            def on_agent_error(source, event):
+                """Handle agent execution error."""
+                try:
+                    agent_ctx = _pop_agent()
+                    if agent_ctx is None:
+                        return
 
-                agent_node = agent_ctx.node
-                agent_node.end_time = _utc()
+                    agent_node = agent_ctx.node
+                    agent_node.end_time = _utc()
 
-                # Extract error from event
-                error = getattr(event, "error", None)
-                if error is not None:
-                    agent_node.error = str(error)
-                else:
-                    agent_node.error = "Unknown error"
+                    # Extract error from event
+                    error = getattr(event, "error", None)
+                    if error is not None:
+                        agent_node.error = str(error)
+                    else:
+                        agent_node.error = "Unknown error"
 
-                # Store sub-spans in metadata
-                meta = _ensure_meta(agent_node)
-                meta["sub_spans"] = agent_ctx.sub_spans
+                    # Store sub-spans in metadata
+                    meta = _ensure_meta(agent_node)
+                    meta["sub_spans"] = agent_ctx.sub_spans
 
-                # Report the agent span to the tracker
-                t.on_node_start(agent_node)
-                t.on_node_error(agent_node, Exception(agent_node.error))
-            except Exception:
-                pass
+                    # Report the agent span to the tracker
+                    t.on_node_start(agent_node)
+                    t.on_node_error(agent_node, Exception(agent_node.error))
+                except Exception:
+                    pass
 
         # ---- LLM Event Handlers ----
 
-        @crewai_event_bus.on(LLMCallStartedEvent)
-        def on_llm_started(source, event):
-            """Handle LLM call start."""
-            try:
-                # Extract model name
-                model = getattr(event, "model", None) or getattr(event, "llm", None)
-                model_name = str(model) if model else "unknown"
+        if LLMCallStartedEvent is not None:
+            @crewai_event_bus.on(LLMCallStartedEvent)
+            def on_llm_started(source, event):
+                """Handle LLM call start."""
+                try:
+                    # Extract model name
+                    model = getattr(event, "model", None) or getattr(event, "llm", None)
+                    model_name = str(model) if model else "unknown"
 
-                # Extract messages/prompt
-                messages = getattr(event, "messages", None)
-                prompt = getattr(event, "prompt", None)
-                inputs = messages if messages else prompt
+                    # Extract messages/prompt
+                    messages = getattr(event, "messages", None)
+                    prompt = getattr(event, "prompt", None)
+                    inputs = messages if messages else prompt
 
-                node_name = f"llm:{model_name}"
-                rec, snap, intr, tok = _start_sub_span(node_name, inputs)
+                    node_name = f"llm:{model_name}"
+                    rec, snap, intr, tok = _start_sub_span(node_name, inputs)
 
-                # Store metadata
-                meta = _ensure_meta(rec)
-                meta["is_llm_call"] = True
-                if model_name != "unknown":
-                    meta["model_name"] = model_name
+                    # Store metadata
+                    meta = _ensure_meta(rec)
+                    meta["is_llm_call"] = True
+                    if model_name != "unknown":
+                        meta["model_name"] = model_name
 
-                # Store for correlation with completion event
-                event_id = str(id(event))
-                _active_llm_spans[event_id] = (rec, snap, intr, tok)
-            except Exception:
-                pass
+                    # Store for correlation with completion event
+                    event_id = str(id(event))
+                    _active_llm_spans[event_id] = (rec, snap, intr, tok)
+                except Exception:
+                    pass
 
-        @crewai_event_bus.on(LLMCallCompletedEvent)
-        def on_llm_completed(source, event):
-            """Handle LLM call completion."""
-            try:
-                # Try to find the matching start span
-                event_id = str(id(event))
-                
-                # If we can't find by exact event id, use the most recent one
-                if event_id not in _active_llm_spans and _active_llm_spans:
-                    event_id = list(_active_llm_spans.keys())[-1]
-                
-                if event_id not in _active_llm_spans:
-                    return
+        if LLMCallCompletedEvent is not None:
+            @crewai_event_bus.on(LLMCallCompletedEvent)
+            def on_llm_completed(source, event):
+                """Handle LLM call completion."""
+                try:
+                    # Try to find the matching start span
+                    event_id = str(id(event))
 
-                rec, snap, intr, tok = _active_llm_spans.pop(event_id)
+                    # If we can't find by exact event id, use the most recent one
+                    if event_id not in _active_llm_spans and _active_llm_spans:
+                        event_id = list(_active_llm_spans.keys())[-1]
 
-                # Extract response
-                response = getattr(event, "response", None)
-                output = getattr(event, "output", None)
-                result = response if response is not None else output
+                    if event_id not in _active_llm_spans:
+                        return
 
-                _finish_sub_span_ok(rec, snap, result, intr, tok)
-            except Exception:
-                pass
+                    rec, snap, intr, tok = _active_llm_spans.pop(event_id)
 
-        @crewai_event_bus.on(LLMCallFailedEvent)
-        def on_llm_failed(source, event):
-            """Handle LLM call failure."""
-            try:
-                event_id = str(id(event))
-                
-                if event_id not in _active_llm_spans and _active_llm_spans:
-                    event_id = list(_active_llm_spans.keys())[-1]
-                
-                if event_id not in _active_llm_spans:
-                    return
+                    # Extract response
+                    response = getattr(event, "response", None)
+                    output = getattr(event, "output", None)
+                    result = response if response is not None else output
 
-                rec, _, intr, tok = _active_llm_spans.pop(event_id)
+                    _finish_sub_span_ok(rec, snap, result, intr, tok)
+                except Exception:
+                    pass
 
-                # Extract error
-                error = getattr(event, "error", None) or getattr(event, "exception", None)
-                if error is None:
-                    error = Exception("LLM call failed")
+        if LLMCallFailedEvent is not None:
+            @crewai_event_bus.on(LLMCallFailedEvent)
+            def on_llm_failed(source, event):
+                """Handle LLM call failure."""
+                try:
+                    event_id = str(id(event))
 
-                _finish_sub_span_err(rec, intr, tok, error if isinstance(error, BaseException) else Exception(str(error)))
-            except Exception:
-                pass
+                    if event_id not in _active_llm_spans and _active_llm_spans:
+                        event_id = list(_active_llm_spans.keys())[-1]
+
+                    if event_id not in _active_llm_spans:
+                        return
+
+                    rec, _, intr, tok = _active_llm_spans.pop(event_id)
+
+                    # Extract error
+                    error = getattr(event, "error", None) or getattr(event, "exception", None)
+                    if error is None:
+                        error = Exception("LLM call failed")
+
+                    _finish_sub_span_err(rec, intr, tok, error if isinstance(error, BaseException) else Exception(str(error)))
+                except Exception:
+                    pass
 
         # ---- Tool Event Handlers ----
 
-        @crewai_event_bus.on(ToolUsageStartedEvent)
-        def on_tool_started(source, event):
-            """Handle tool usage start."""
-            try:
-                # Extract tool name
-                tool_name = getattr(event, "tool_name", None) or getattr(event, "name", None)
-                if tool_name is None:
-                    tool = getattr(event, "tool", None)
-                    tool_name = getattr(tool, "name", "unknown_tool") if tool else "unknown_tool"
+        if ToolUsageStartedEvent is not None:
+            @crewai_event_bus.on(ToolUsageStartedEvent)
+            def on_tool_started(source, event):
+                """Handle tool usage start."""
+                try:
+                    # Extract tool name
+                    tool_name = getattr(event, "tool_name", None) or getattr(event, "name", None)
+                    if tool_name is None:
+                        tool = getattr(event, "tool", None)
+                        tool_name = getattr(tool, "name", "unknown_tool") if tool else "unknown_tool"
 
-                # Extract tool inputs - try multiple attribute names
-                tool_inputs = (
-                    getattr(event, "tool_input", None) or 
-                    getattr(event, "input", None) or 
-                    getattr(event, "args", None) or
-                    getattr(event, "arguments", None) or
-                    getattr(event, "kwargs", None) or
-                    getattr(event, "tool_args", None)
-                )
-
-                node_name = str(tool_name)
-                rec, snap, intr, tok = _start_sub_span(node_name, tool_inputs)
-
-                # Store metadata
-                meta = _ensure_meta(rec)
-                meta["is_tool_call"] = True
-                meta["tool_name"] = str(tool_name)
-                # Also store the tool inputs in metadata for later use
-                if tool_inputs:
-                    meta["tool_inputs"] = tool_inputs
-
-                # Store for correlation with completion event
-                event_id = str(id(event))
-                _active_tool_spans[event_id] = (rec, snap, intr, tok)
-            except Exception:
-                pass
-
-        @crewai_event_bus.on(ToolUsageFinishedEvent)
-        def on_tool_finished(source, event):
-            """Handle tool usage completion."""
-            try:
-                event_id = str(id(event))
-                
-                if event_id not in _active_tool_spans and _active_tool_spans:
-                    event_id = list(_active_tool_spans.keys())[-1]
-                
-                if event_id not in _active_tool_spans:
-                    return
-
-                rec, snap, intr, tok = _active_tool_spans.pop(event_id)
-
-                # Try to extract tool input from finished event if not already set
-                if rec.inputs is None or rec.inputs == {}:
-                    tool_input = (
+                    # Extract tool inputs - try multiple attribute names
+                    tool_inputs = (
                         getattr(event, "tool_input", None) or
                         getattr(event, "input", None) or
                         getattr(event, "args", None) or
-                        getattr(event, "arguments", None)
+                        getattr(event, "arguments", None) or
+                        getattr(event, "kwargs", None) or
+                        getattr(event, "tool_args", None)
                     )
-                    if tool_input:
-                        rec.inputs = _freeze(tool_input)
 
-                # Extract result
-                result = getattr(event, "output", None) or getattr(event, "result", None)
+                    node_name = str(tool_name)
+                    rec, snap, intr, tok = _start_sub_span(node_name, tool_inputs)
 
-                _finish_sub_span_ok(rec, snap, result, intr, tok)
-            except Exception:
-                pass
+                    # Store metadata
+                    meta = _ensure_meta(rec)
+                    meta["is_tool_call"] = True
+                    meta["tool_name"] = str(tool_name)
+                    # Also store the tool inputs in metadata for later use
+                    if tool_inputs:
+                        meta["tool_inputs"] = tool_inputs
 
-        @crewai_event_bus.on(ToolUsageErrorEvent)
-        def on_tool_error(source, event):
-            """Handle tool usage error."""
-            try:
-                event_id = str(id(event))
-                
-                if event_id not in _active_tool_spans and _active_tool_spans:
-                    event_id = list(_active_tool_spans.keys())[-1]
-                
-                if event_id not in _active_tool_spans:
-                    return
+                    # Store for correlation with completion event
+                    event_id = str(id(event))
+                    _active_tool_spans[event_id] = (rec, snap, intr, tok)
+                except Exception:
+                    pass
 
-                rec, _, intr, tok = _active_tool_spans.pop(event_id)
+        if ToolUsageFinishedEvent is not None:
+            @crewai_event_bus.on(ToolUsageFinishedEvent)
+            def on_tool_finished(source, event):
+                """Handle tool usage completion."""
+                try:
+                    event_id = str(id(event))
 
-                # Extract error
-                error = getattr(event, "error", None) or getattr(event, "exception", None)
-                if error is None:
-                    error = Exception("Tool execution failed")
+                    if event_id not in _active_tool_spans and _active_tool_spans:
+                        event_id = list(_active_tool_spans.keys())[-1]
 
-                _finish_sub_span_err(rec, intr, tok, error if isinstance(error, BaseException) else Exception(str(error)))
-            except Exception:
-                pass
+                    if event_id not in _active_tool_spans:
+                        return
+
+                    rec, snap, intr, tok = _active_tool_spans.pop(event_id)
+
+                    # Try to extract tool input from finished event if not already set
+                    if rec.inputs is None or rec.inputs == {}:
+                        tool_input = (
+                            getattr(event, "tool_input", None) or
+                            getattr(event, "input", None) or
+                            getattr(event, "args", None) or
+                            getattr(event, "arguments", None)
+                        )
+                        if tool_input:
+                            rec.inputs = _freeze(tool_input)
+
+                    # Extract result
+                    result = getattr(event, "output", None) or getattr(event, "result", None)
+
+                    _finish_sub_span_ok(rec, snap, result, intr, tok)
+                except Exception:
+                    pass
+
+        if ToolUsageErrorEvent is not None:
+            @crewai_event_bus.on(ToolUsageErrorEvent)
+            def on_tool_error(source, event):
+                """Handle tool usage error."""
+                try:
+                    event_id = str(id(event))
+
+                    if event_id not in _active_tool_spans and _active_tool_spans:
+                        event_id = list(_active_tool_spans.keys())[-1]
+
+                    if event_id not in _active_tool_spans:
+                        return
+
+                    rec, _, intr, tok = _active_tool_spans.pop(event_id)
+
+                    # Extract error
+                    error = getattr(event, "error", None) or getattr(event, "exception", None)
+                    if error is None:
+                        error = Exception("Tool execution failed")
+
+                    _finish_sub_span_err(rec, intr, tok, error if isinstance(error, BaseException) else Exception(str(error)))
+                except Exception:
+                    pass
 
         self._installed = True
 
