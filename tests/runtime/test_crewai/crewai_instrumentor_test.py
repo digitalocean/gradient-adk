@@ -78,11 +78,12 @@ def mock_tool():
 def wait_for_event_bus(delay: float = 0.05):
     """Wait for the CrewAI event bus to process handlers.
 
-    Uses flush() to properly wait for pending handlers to complete,
-    which is more reliable than a fixed sleep when the thread pool is busy.
+    Prefer flush() when available; fall back to a short sleep for older
+    CrewAI versions that don't expose flush().
     """
     from crewai.events import crewai_event_bus
-    crewai_event_bus.flush(timeout=5.0)
+    if hasattr(crewai_event_bus, "flush"):
+        crewai_event_bus.flush(timeout=5.0)
     time.sleep(delay)
 
 
