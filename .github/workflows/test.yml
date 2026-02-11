@@ -27,7 +27,7 @@ jobs:
       - name: Install package and test deps
         run: |
           pip install -e .
-          pip install pytest pytest-cov pydantic-ai
+          pip install pytest pytest-cov pydantic-ai crewai
 
       - name: Run unit tests with coverage
         run: |

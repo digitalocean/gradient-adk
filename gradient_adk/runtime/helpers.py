@@ -277,10 +277,37 @@ def _register_pydanticai() -> None:
     )
 
 
+def _register_crewai() -> None:
+    """Register CrewAI instrumentor if available."""
+
+    def is_available() -> bool:
+        try:
+            from crewai import Crew
+
+            return True
+        except ImportError:
+            return False
+
+    def factory():
+        from gradient_adk.runtime.crewai.crewai_instrumentor import (
+            CrewAIInstrumentor,
+        )
+
+        return CrewAIInstrumentor()
+
+    registry.register(
+        name="crewai",
+        env_disable_var="GRADIENT_DISABLE_CREWAI_INSTRUMENTOR",
+        availability_check=is_available,
+        instrumentor_factory=factory,
+    )
+
+
 def register_all_instrumentors() -> None:
     """Register all known instrumentors with the registry."""
     _register_langgraph()
     _register_pydanticai()
+    _register_crewai()
 
 
 def capture_all() -> Optional[DigitalOceanTracesTracker]:

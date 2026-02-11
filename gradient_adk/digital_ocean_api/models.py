@@ -71,6 +71,15 @@ class WorkflowSpanDetails(BaseModel):
     spans: List["Span"] = Field(default_factory=list, description="Nested sub-spans")
 
 
+class AgentSpanDetails(BaseModel):
+    """Agent span containing nested sub-spans for LLM and tool calls."""
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    common: Optional[SpanCommon] = None
+    spans: List["Span"] = Field(default_factory=list, description="Nested sub-spans")
+
+
 class Span(BaseModel):
     """
     Represents a span within a trace (e.g., LLM call, retriever, tool, workflow).
@@ -99,10 +108,14 @@ class Span(BaseModel):
     workflow: Optional[WorkflowSpanDetails] = Field(
         None, description="Workflow span with nested sub-spans"
     )
+    agent: Optional[AgentSpanDetails] = Field(
+        None, description="Agent span with nested sub-spans"
+    )
 
 
-# Update forward reference for WorkflowSpanDetails
+# Update forward references for nested span details
 WorkflowSpanDetails.model_rebuild()
+AgentSpanDetails.model_rebuild()
 
 
 class Trace(BaseModel):
