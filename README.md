@@ -41,6 +41,13 @@ Building AI agents is challenging enough without worrying about observability, e
 - **Streaming Support**: Full support for streaming responses with trace capture
 - **Production Ready**: Designed for seamless deployment to DigitalOcean infrastructure
 
+### 🛡️ Guardrails
+
+- **Built-in Safety**: Evaluate user inputs and AI outputs against content safety rails
+- **Multiple Rail Types**: Jailbreak detection, content moderation, and sensitive data detection
+- **Simple API**: Single `check()` method with clear pass/fail results
+- **Automatic Tracing**: Guardrail evaluations are captured as spans in the ADK trace when used inside `@entrypoint`
+
 ## Installation
 
 ```bash
@@ -167,6 +174,56 @@ async def main(input: dict, context: RequestContext):
         async for chunk in llm.stream(input["query"]):
             yield chunk
 ```
+
+### Using Guardrails
+
+Check user inputs and AI outputs against safety rails before and after LLM calls:
+
+```python
+from gradient_adk import entrypoint, RequestContext, Guardrails
+
+guardrails = Guardrails()
+
+@entrypoint
+async def main(input: dict, context: RequestContext):
+    # Check user input before calling the LLM
+    result = await guardrails.check(
+        rail_type="jailbreak",
+        messages=[{"role": "user", "content": input["prompt"]}],
+    )
+    if not result.allowed:
+        return {"error": "Blocked", "violations": [v.message for v in result.violations]}
+
+    response = await llm.generate(input["prompt"])
+
+    # Optionally check LLM output before returning
+    output_check = await guardrails.check(
+        rail_type="content_moderation",
+        messages=[{"role": "assistant", "content": response}],
+        evaluation_type="output",
+    )
+    if not output_check.allowed:
+        return {"error": "Response blocked by content moderation"}
+
+    return {"response": response}
+```
+
+The `check()` method returns a `GuardrailResult` with:
+
+| Field         | Type                     | Description                                   |
+| ------------- | ------------------------ | --------------------------------------------- |
+| `allowed`     | `bool`                   | Whether the content passed the guardrail       |
+| `violations`  | `list[GuardrailViolation]` | List of violations (empty if allowed)        |
+| `team_id`     | `int`                    | Team ID associated with the request            |
+| `token_usage` | `TokenUsage`             | Token consumption (`input_tokens`, `output_tokens`, `total_tokens`) |
+
+**Available rail types:**
+
+| Rail Type              | Description                                      |
+| ---------------------- | ------------------------------------------------ |
+| `jailbreak`            | Detects prompt injection and jailbreak attempts   |
+| `content_moderation`   | Detects harmful, violent, or inappropriate content |
+| `sensitive_data`       | Detects PII and sensitive information              |
 
 ## CLI Commands
 
@@ -349,6 +406,7 @@ The Gradient ADK is designed to work with any Python-based AI agent framework:
 - ✅ **LangChain** - Use trace decorators (`@trace_llm`, `@trace_tool`, `@trace_retriever`) for custom spans
 - ✅ **CrewAI** - Use trace decorators for agent and task execution
 - ✅ **Custom Frameworks** - Use trace decorators for any function
+- ✅ **Guardrails** - Built-in safety checks for jailbreak, content moderation, and sensitive data detection
 
 ## Support
 
