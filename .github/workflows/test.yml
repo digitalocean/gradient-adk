@@ -27,7 +27,7 @@ jobs:
       - name: Install package and test deps
         run: |
           pip install -e .
-          pip install pytest pytest-cov pydantic-ai crewai
+          pip install pytest pytest-cov pydantic-ai crewai "a2a-sdk[http-server]>=0.3.0"
 
       - name: Run unit tests with coverage
         run: |

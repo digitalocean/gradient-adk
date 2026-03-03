@@ -325,6 +325,9 @@ export GRADIENT_MODEL_ACCESS_KEY=your_gradient_key
 
 # Optional: Enable verbose trace logging
 export GRADIENT_VERBOSE=1
+
+# Optional: A2A protocol — base URL for AgentCard discovery
+export A2A_BASE_URL=https://your-app.ondigitalocean.app
 ```
 
 ## Project Structure
@@ -349,6 +352,112 @@ The Gradient ADK is designed to work with any Python-based AI agent framework:
 - ✅ **LangChain** - Use trace decorators (`@trace_llm`, `@trace_tool`, `@trace_retriever`) for custom spans
 - ✅ **CrewAI** - Use trace decorators for agent and task execution
 - ✅ **Custom Frameworks** - Use trace decorators for any function
+
+## A2A Protocol Support
+
+The Gradient ADK supports the [Agent-to-Agent (A2A) protocol v0.3.0](https://github.com/google/A2A), enabling any `@entrypoint` agent to communicate with A2A-compatible clients. Install with `pip install gradient-adk[a2a]`.
+
+### Wrapping an Agent with A2A
+
+Any `@entrypoint` agent can be exposed as an A2A server with no code changes:
+
+```python
+from gradient_adk import entrypoint
+from gradient_adk.a2a import create_a2a_server
+
+@entrypoint
+async def my_agent(data: dict, context) -> dict:
+    return {"output": f"You said: {data.get('prompt', '')}"}
+
+app = create_a2a_server(my_agent)
+```
+
+Run with `uvicorn my_module:app --host 0.0.0.0 --port 8000`. The agent is discoverable at `/.well-known/agent-card.json` and accepts JSON-RPC calls (`message/send`, `tasks/get`, `tasks/cancel`).
+
+### How the Protocol Works
+
+A2A uses a discover-then-call pattern over JSON-RPC. Here is the full client-server flow:
+
+1. **Discover** — The client fetches the AgentCard at `GET /.well-known/agent-card.json`. This returns the agent's name, transport URL, supported capabilities, and input/output modes. The client uses this to decide whether it can talk to this agent.
+
+2. **Send** — The client sends a message via `POST /` with JSON-RPC method `message/send`. The server validates the message (text-only in MVP), creates a task, executes the agent, and returns a `Task` object with a `taskId` and current status.
+
+3. **Poll** — The client checks task progress via `tasks/get` with the `taskId`. Once the task reaches a terminal state (`completed`, `failed`, or `canceled`), the response includes the agent's output in the task artifacts. The `historyLength` parameter controls how much conversation history is returned.
+
+4. **Cancel** (optional) — The client can request cancellation via `tasks/cancel`. This is best-effort and idempotent — if the agent already finished, the cancel is a no-op.
+
+```
+Client                                 Server
+  │                                      │
+  ├── GET /.well-known/agent-card.json ──►  AgentCard (capabilities, URL)
+  │                                      │
+  ├── POST / message/send ──────────────►  Create task → Execute agent
+  │◄─────────────────── Task {id, status} │
+  │                                      │
+  ├── POST / tasks/get ─────────────────►  Return task state + artifacts
+  │◄──────────── Task {id, status, result} │
+  │                                      │
+  └── POST / tasks/cancel ──────────────►  Best-effort cancellation
+```
+
+### Deploying to DigitalOcean App Platform
+
+When you deploy to App Platform, the public URL is assigned after deployment. The A2A server needs this URL for the AgentCard so that clients know where to send requests. The workflow is:
+
+1. **Deploy your agent** to App Platform as usual with `gradient agent deploy`
+2. **Get your app's public URL** from the App Platform dashboard (e.g., `https://your-agent-abc123.ondigitalocean.app`)
+3. **Set the environment variable** in your app's settings:
+   ```bash
+   A2A_BASE_URL=https://your-agent-abc123.ondigitalocean.app
+   ```
+4. **Redeploy** — the agent restarts and the AgentCard now advertises the correct public URL
+
+For local development, no configuration is needed — it defaults to `http://localhost:8000`.
+
+### Calling a Remote A2A Agent from Another Agent
+
+Once deployed, any A2A-compatible agent or client can call your agent:
+
+```python
+import httpx
+
+# Discover the remote agent
+card = httpx.get("https://your-agent.ondigitalocean.app/.well-known/agent-card.json").json()
+rpc_url = card["url"]
+
+# Send a message
+response = httpx.post(rpc_url, json={
+    "jsonrpc": "2.0", "id": "1",
+    "method": "message/send",
+    "params": {
+        "message": {
+            "role": "user",
+            "parts": [{"kind": "text", "text": "Hello from another agent!"}],
+            "message_id": "msg-1",
+            "kind": "message",
+        }
+    },
+})
+task = response.json()["result"]
+
+# Poll until done
+result = httpx.post(rpc_url, json={
+    "jsonrpc": "2.0", "id": "2",
+    "method": "tasks/get",
+    "params": {"id": task["id"]},
+}).json()["result"]
+```
+
+See `examples/a2a/client.py` for a complete async client with discovery, send, poll, and cancel.
+
+### Supported Operations
+
+- **`message/send`**: Send a message to the agent, creates or continues a task
+- **`tasks/get`**: Poll task state and retrieve results (supports `historyLength`)
+- **`tasks/cancel`**: Best-effort task cancellation (idempotent)
+- **Agent Discovery**: `GET /.well-known/agent-card.json` for capabilities and transport URL
+
+Text-only input/output (`text/plain`) in the current release. Streaming, push notifications, and authenticated extended cards are explicitly disabled via AgentCard capability flags.
 
 ## Support
 
