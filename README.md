@@ -191,8 +191,8 @@ async def main(input: dict, context: RequestContext):
         rail_type="jailbreak",
         messages=[{"role": "user", "content": input["prompt"]}],
     )
-    if not result.allowed:
-        return {"error": "Blocked", "violations": [v.message for v in result.violations]}
+    if not result["allowed"]:
+        return {"error": "Blocked", "violations": result["violations"]}
 
     response = await llm.generate(input["prompt"])
 
@@ -202,20 +202,20 @@ async def main(input: dict, context: RequestContext):
         messages=[{"role": "assistant", "content": response}],
         evaluation_type="output",
     )
-    if not output_check.allowed:
+    if not output_check["allowed"]:
         return {"error": "Response blocked by content moderation"}
 
     return {"response": response}
 ```
 
-The `check()` method returns a `GuardrailResult` with:
+The `check()` method returns a dict with:
 
-| Field         | Type                     | Description                                   |
-| ------------- | ------------------------ | --------------------------------------------- |
-| `allowed`     | `bool`                   | Whether the content passed the guardrail       |
-| `violations`  | `list[GuardrailViolation]` | List of violations (empty if allowed)        |
-| `team_id`     | `int`                    | Team ID associated with the request            |
-| `token_usage` | `TokenUsage`             | Token consumption (`input_tokens`, `output_tokens`, `total_tokens`) |
+| Key           | Type         | Description                                   |
+| ------------- | ------------ | --------------------------------------------- |
+| `allowed`     | `bool`       | Whether the content passed the guardrail       |
+| `violations`  | `list[dict]` | List of violations, each with `message` and `rule_name` |
+| `team_id`     | `int`        | Team ID associated with the request            |
+| `token_usage` | `dict`       | Token consumption (`input_tokens`, `output_tokens`, `total_tokens`) |
 
 **Available rail types:**
 

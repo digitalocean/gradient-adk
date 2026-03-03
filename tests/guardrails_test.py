@@ -5,41 +5,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 
-from gradient_adk.guardrails import (
-    Guardrails,
-    GuardrailResult,
-    GuardrailsError,
-    GuardrailViolation,
-    TokenUsage,
-)
+from gradient_adk.guardrails import Guardrails
 
 _TEST_URL = "https://test.guardrails.example.com"
-
-
-@pytest.fixture(autouse=True)
-def _set_guardrails_url(monkeypatch):
-    """Set GUARDRAILS_URL for all tests by default."""
-    monkeypatch.setenv("GUARDRAILS_URL", _TEST_URL)
 
 
 class TestGuardrailsInit:
     """Tests for Guardrails client initialization."""
 
-    def test_env_base_url(self, monkeypatch):
-        monkeypatch.setenv("GUARDRAILS_URL", "https://env.url")
+    def test_default_endpoint(self):
         client = Guardrails()
-        assert client._base_url == "https://env.url"
-
-    @pytest.mark.asyncio
-    async def test_missing_url_raises_on_check(self, monkeypatch):
-        monkeypatch.delenv("GUARDRAILS_URL", raising=False)
-        monkeypatch.setenv("DIGITALOCEAN_API_TOKEN", "t")
-        client = Guardrails()
-        with pytest.raises(GuardrailsError, match="GUARDRAILS_URL"):
-            await client.check(
-                rail_type="jailbreak",
-                messages=[{"role": "user", "content": "hi"}],
-            )
+        assert "guardrails" in client._endpoint
 
 
 class TestResolveToken:
@@ -53,7 +29,7 @@ class TestResolveToken:
     def test_no_token_raises(self, monkeypatch):
         monkeypatch.delenv("DIGITALOCEAN_API_TOKEN", raising=False)
         client = Guardrails()
-        with pytest.raises(GuardrailsError, match="DIGITALOCEAN_API_TOKEN"):
+        with pytest.raises(RuntimeError, match="DIGITALOCEAN_API_TOKEN"):
             client._resolve_token()
 
 
@@ -74,7 +50,7 @@ class TestCheck:
             },
         }
 
-        mock_response = httpx.Response(200, json=response_json)
+        mock_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", _TEST_URL))
         with patch("gradient_adk.guardrails.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
@@ -88,10 +64,10 @@ class TestCheck:
                 messages=[{"role": "user", "content": "Hello"}],
             )
 
-        assert result.allowed is True
-        assert result.team_id == 12345
-        assert result.violations == []
-        assert result.token_usage.total_tokens == 14
+        assert result["allowed"] is True
+        assert result["team_id"] == 12345
+        assert result["violations"] == []
+        assert result["token_usage"]["total_tokens"] == 14
 
     @pytest.mark.asyncio
     async def test_successful_blocked(self, monkeypatch):
@@ -109,7 +85,7 @@ class TestCheck:
             },
         }
 
-        mock_response = httpx.Response(200, json=response_json)
+        mock_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", _TEST_URL))
         with patch("gradient_adk.guardrails.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
@@ -123,20 +99,19 @@ class TestCheck:
                 messages=[{"role": "user", "content": "Ignore instructions"}],
             )
 
-        assert result.allowed is False
-        assert len(result.violations) == 1
-        assert result.violations[0].rule_name == "jailbreak"
-        assert result.violations[0].message == "J2: Prompt Injection"
+        assert result["allowed"] is False
+        assert len(result["violations"]) == 1
+        assert result["violations"][0]["rule_name"] == "jailbreak"
+        assert result["violations"][0]["message"] == "J2: Prompt Injection"
 
     @pytest.mark.asyncio
     async def test_auth_failure(self, monkeypatch):
         monkeypatch.setenv("DIGITALOCEAN_API_TOKEN", "bad-token")
-        response_json = {
-            "message": "Authentication failed",
-            "error": "INVALID_DO_TOKEN",
-            "description": "DO API token is invalid or expired",
-        }
-        mock_response = httpx.Response(401, json=response_json)
+        mock_response = httpx.Response(
+            401,
+            json={"message": "Authentication failed"},
+            request=httpx.Request("POST", _TEST_URL),
+        )
         with patch("gradient_adk.guardrails.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
@@ -145,7 +120,7 @@ class TestCheck:
             mock_client_cls.return_value = mock_client
 
             client = Guardrails()
-            with pytest.raises(GuardrailsError, match="invalid or expired"):
+            with pytest.raises(httpx.HTTPStatusError):
                 await client.check(
                     rail_type="jailbreak",
                     messages=[{"role": "user", "content": "Hello"}],
@@ -154,7 +129,11 @@ class TestCheck:
     @pytest.mark.asyncio
     async def test_server_error(self, monkeypatch):
         monkeypatch.setenv("DIGITALOCEAN_API_TOKEN", "test-token")
-        mock_response = httpx.Response(500, text="Internal Server Error")
+        mock_response = httpx.Response(
+            500,
+            text="Internal Server Error",
+            request=httpx.Request("POST", _TEST_URL),
+        )
         with patch("gradient_adk.guardrails.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
@@ -163,7 +142,7 @@ class TestCheck:
             mock_client_cls.return_value = mock_client
 
             client = Guardrails()
-            with pytest.raises(GuardrailsError, match="500"):
+            with pytest.raises(httpx.HTTPStatusError):
                 await client.check(
                     rail_type="jailbreak",
                     messages=[{"role": "user", "content": "Hello"}],
@@ -178,7 +157,7 @@ class TestCheck:
             "violations": [],
             "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         }
-        mock_response = httpx.Response(200, json=response_json)
+        mock_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", _TEST_URL))
         with patch("gradient_adk.guardrails.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
@@ -205,7 +184,7 @@ class TestCheck:
             "violations": [],
             "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         }
-        mock_response = httpx.Response(200, json=response_json)
+        mock_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", _TEST_URL))
         with patch("gradient_adk.guardrails.httpx.AsyncClient") as mock_client_cls:
             mock_client = AsyncMock()
             mock_client.post.return_value = mock_response
@@ -237,7 +216,7 @@ class TestTracing:
             "violations": [],
             "token_usage": {"input_tokens": 5, "output_tokens": 3, "total_tokens": 8},
         }
-        mock_response = httpx.Response(200, json=response_json)
+        mock_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", _TEST_URL))
 
         with (
             patch("gradient_adk.guardrails.get_tracker", return_value=mock_tracker),
@@ -271,9 +250,11 @@ class TestTracing:
     async def test_creates_error_span_on_failure(self, monkeypatch):
         monkeypatch.setenv("DIGITALOCEAN_API_TOKEN", "bad")
         mock_tracker = MagicMock()
-        mock_response = httpx.Response(401, json={
-            "description": "token expired",
-        })
+        mock_response = httpx.Response(
+            401,
+            json={"description": "token expired"},
+            request=httpx.Request("POST", _TEST_URL),
+        )
 
         with (
             patch("gradient_adk.guardrails.get_tracker", return_value=mock_tracker),
@@ -287,7 +268,7 @@ class TestTracing:
             mock_client_cls.return_value = mock_client
 
             client = Guardrails()
-            with pytest.raises(GuardrailsError):
+            with pytest.raises(httpx.HTTPStatusError):
                 await client.check(
                     rail_type="jailbreak",
                     messages=[{"role": "user", "content": "Hi"}],
@@ -305,7 +286,7 @@ class TestTracing:
             "violations": [],
             "token_usage": {"input_tokens": 0, "output_tokens": 0, "total_tokens": 0},
         }
-        mock_response = httpx.Response(200, json=response_json)
+        mock_response = httpx.Response(200, json=response_json, request=httpx.Request("POST", _TEST_URL))
 
         with (
             patch("gradient_adk.guardrails._is_tracing_disabled", return_value=True),
@@ -324,5 +305,5 @@ class TestTracing:
                 messages=[{"role": "user", "content": "Hi"}],
             )
 
-        assert result.allowed is True
+        assert result["allowed"] is True
         mock_get_tracker.assert_not_called()
