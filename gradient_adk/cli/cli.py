@@ -8,7 +8,12 @@ import typer
 import importlib.metadata
 
 from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigManager
+from gradient_adk.cli.config.agent_config_manager import DeploymentTarget, DOCCConfig
 from gradient_adk.cli.agent.deployment.deploy_service import AgentDeployService
+from gradient_adk.cli.agent.deployment.docc.docc_deploy_service import (
+    DOCCDeployService,
+    DOCCDeployError,
+)
 from gradient_adk.cli.agent.direct_launch_service import DirectLaunchService
 from gradient_adk.cli.agent.traces_service import GalileoTracesService
 from gradient_adk.cli.agent.evaluation_service import (
@@ -98,34 +103,35 @@ def _configure_agent(
     deployment_name: Optional[str] = None,
     entrypoint_file: Optional[str] = None,
     description: Optional[str] = None,
+    deployment_target: Optional[DeploymentTarget] = None,
+    docc_config: Optional[DOCCConfig] = None,
     interactive: bool = True,
-    skip_entrypoint_prompt: bool = False,  # New parameter for init
+    skip_entrypoint_prompt: bool = False,
 ) -> None:
     """Configure agent settings and save to YAML file."""
-    # If we're skipping entrypoint prompt (init case), we need to handle interactive mode specially
     if skip_entrypoint_prompt and interactive:
-        # Handle the prompts manually for init case
         if agent_name is None:
             agent_name = typer.prompt("Agent workspace name")
         if deployment_name is None:
             deployment_name = typer.prompt("Agent deployment name", default="main")
-        # entrypoint_file is already set and we don't prompt for it
 
-        # Now call configure in non-interactive mode since we have all values
         _agent_config_manager.configure(
             agent_name=agent_name,
             agent_environment=deployment_name,
             entrypoint_file=entrypoint_file,
             description=description,
+            deployment_target=deployment_target,
+            docc_config=docc_config,
             interactive=False,
         )
     else:
-        # Normal configure case - let the manager handle prompts
         _agent_config_manager.configure(
             agent_name=agent_name,
             agent_environment=deployment_name,
             entrypoint_file=entrypoint_file,
             description=description,
+            deployment_target=deployment_target,
+            docc_config=docc_config,
             interactive=interactive,
         )
 
@@ -243,16 +249,33 @@ def agent_configure(
         "--description",
         help="Description for the agent deployment (max 1000 characters)",
     ),
+    deploy_target: Optional[str] = typer.Option(
+        None,
+        "--target",
+        help="Deployment target: 'genai_api' or 'docc'",
+    ),
     interactive: bool = typer.Option(
         True, "--interactive/--no-interactive", help="Interactive prompt mode"
     ),
 ):
     """Configure agent settings in config.yaml for an existing project."""
+    resolved_target = None
+    if deploy_target is not None:
+        try:
+            resolved_target = DeploymentTarget(deploy_target)
+        except ValueError:
+            typer.echo(
+                f"❌ Invalid deployment target '{deploy_target}'. Must be 'genai_api' or 'docc'.",
+                err=True,
+            )
+            raise typer.Exit(1)
+
     _configure_agent(
         agent_name=agent_name,
         deployment_name=deployment_name,
         entrypoint_file=entrypoint_file,
         description=description,
+        deployment_target=resolved_target,
         interactive=interactive,
     )
 
@@ -301,6 +324,11 @@ def agent_deploy(
         envvar="DIGITALOCEAN_API_TOKEN",
         hide_input=True,
     ),
+    target: Optional[str] = typer.Option(
+        None,
+        "--target",
+        help="Deployment target: 'genai_api' (default) or 'docc'",
+    ),
     verbose: bool = typer.Option(
         False, "--verbose", "-v", help="Enable verbose logging for debugging deployment"
     ),
@@ -320,7 +348,6 @@ def agent_deploy(
     import asyncio
     import re
     from pathlib import Path
-    from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
     from gradient_adk.cli.agent.deployment.validation import (
         validate_agent_entrypoint,
         ValidationError,
@@ -331,7 +358,6 @@ def agent_deploy(
     # Set verbose mode globally if requested (only in text mode)
     if verbose and not json_output:
         os.environ["GRADIENT_VERBOSE"] = "1"
-        # Configure logging with verbose mode
         from gradient_adk.logging import configure_logging
 
         configure_logging(force_verbose=True)
@@ -414,7 +440,28 @@ def agent_deploy(
                 )
                 typer.echo()
 
-        # Get API token
+        # Resolve deployment target: CLI flag > config file > default
+        deploy_target = _agent_config_manager.get_deployment_target()
+        if target is not None:
+            try:
+                deploy_target = DeploymentTarget(target)
+            except ValueError:
+                error_msg = f"Invalid deployment target '{target}'. Must be 'genai_api' or 'docc'."
+                if json_output:
+                    output_json_error(error_msg)
+                typer.echo(f"❌ {error_msg}", err=True)
+                raise typer.Exit(1)
+
+        # ---- DOCC deployment path ----
+        if deploy_target == DeploymentTarget.DOCC:
+            _deploy_to_docc(
+                agent_workspace_name=agent_workspace_name,
+                agent_deployment_name=agent_deployment_name,
+                json_output=json_output,
+            )
+            return
+
+        # ---- GenAI API deployment path (original) ----
         if not api_token:
             try:
                 api_token = get_do_api_token()
@@ -427,15 +474,14 @@ def agent_deploy(
             typer.echo(f"🚀 Deploying {agent_workspace_name}/{agent_deployment_name}...")
             typer.echo()
 
-        # Get project ID from default project
         async def deploy():
+            from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
             from gradient_adk.digital_ocean_api.errors import (
                 DOAPIClientError,
                 DOAPIAuthError,
             )
 
             async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
-                # Get default project
                 try:
                     project_response = await client.get_default_project()
                     project_id = project_response.project.id
@@ -461,13 +507,9 @@ def agent_deploy(
                     )
                     raise typer.Exit(1)
 
-                # Get description from config (optional)
                 description = _agent_config_manager.get_description()
-
-                # Create deploy service with injected client
                 deploy_service = AgentDeployService(client=client, quiet=json_output)
 
-                # Deploy from current directory
                 workspace_uuid = await deploy_service.deploy_agent(
                     agent_workspace_name=agent_workspace_name,
                     agent_deployment_name=agent_deployment_name,
@@ -482,6 +524,7 @@ def agent_deploy(
                 if json_output:
                     output_json({
                         "status": "success",
+                        "target": "genai_api",
                         "workspace_name": agent_workspace_name,
                         "deployment_name": agent_deployment_name,
                         "workspace_uuid": workspace_uuid,
@@ -504,7 +547,6 @@ def agent_deploy(
         asyncio.run(deploy())
 
     except typer.Exit:
-        # Re-raise typer.Exit without additional processing
         raise
     except EnvironmentError as e:
         if json_output:
@@ -513,11 +555,15 @@ def agent_deploy(
         typer.echo("\nTo set your token:", err=True)
         typer.echo("  export DIGITALOCEAN_API_TOKEN=your_token_here", err=True)
         raise typer.Exit(1)
+    except DOCCDeployError as e:
+        error_msg = str(e) if str(e) else repr(e)
+        if json_output:
+            output_json_error(f"DOCC deployment failed: {error_msg}")
+        typer.echo(f"❌ DOCC deployment failed: {error_msg}", err=True)
+        raise typer.Exit(1)
     except Exception as e:
-        # Get error message with fallback
         error_msg = str(e) if str(e) else repr(e)
 
-        # Check for "feature not enabled" error
         if "feature not enabled" in error_msg.lower():
             if json_output:
                 output_json_error(f"Deployment failed: {error_msg}. The Gradient ADK is currently in public preview.")
@@ -545,6 +591,123 @@ def agent_deploy(
             err=True,
         )
         raise typer.Exit(1)
+
+
+def _deploy_to_docc(
+    agent_workspace_name: str,
+    agent_deployment_name: str,
+    json_output: bool,
+) -> None:
+    """Handle the DOCC deployment path.
+
+    Flow:
+        1. Deploy the container to DOCC (build, push, docc deploy).
+        2. Register the external agent with the GenAI API so traces and the
+           platform-gateway work.
+    """
+    import asyncio
+    from pathlib import Path
+
+    docc_config = _agent_config_manager.get_docc_config()
+    if docc_config is None:
+        error_msg = (
+            "DOCC deployment target is selected but no 'docc' section found in "
+            ".gradient/agent.yml. Run 'gradient agent configure' to set up DOCC settings."
+        )
+        if json_output:
+            output_json_error(error_msg)
+        typer.echo(f"❌ {error_msg}", err=True)
+        raise typer.Exit(1)
+
+    if not json_output:
+        typer.echo(
+            f"🚀 Deploying {agent_workspace_name}/{agent_deployment_name} to DOCC "
+            f"(context: {docc_config.context}, namespace: {docc_config.namespace})..."
+        )
+        typer.echo()
+
+    deploy_service = DOCCDeployService(
+        docc_config=docc_config,
+        quiet=json_output,
+    )
+
+    async def run_docc_deploy():
+        service_address = await deploy_service.deploy_agent(
+            agent_name=agent_workspace_name,
+            agent_environment=agent_deployment_name,
+            source_dir=Path.cwd(),
+        )
+        return service_address
+
+    service_address = asyncio.run(run_docc_deploy())
+
+    # Register with GenAI API for traces/evals (best-effort)
+    registration_result = None
+    try:
+        api_token = get_do_api_token()
+
+        async def register():
+            from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
+            from gradient_adk.digital_ocean_api.models import (
+                RegisterExternalAgentDeploymentInput,
+            )
+
+            async with AsyncDigitalOceanGenAI(api_token=api_token) as client:
+                project_response = await client.get_default_project()
+                reg_input = RegisterExternalAgentDeploymentInput(
+                    agent_workspace_name=agent_workspace_name,
+                    agent_deployment_name=agent_deployment_name,
+                    external_url=f"https://{service_address}",
+                    deployment_target="docc",
+                    project_id=project_response.project.id,
+                    description=_agent_config_manager.get_description(),
+                )
+                return await client.register_external_agent_deployment(reg_input)
+
+        registration_result = asyncio.run(register())
+    except Exception as e:
+        if not json_output:
+            typer.echo(
+                f"\n⚠️  DOCC deploy succeeded but agent registration with GenAI API "
+                f"failed: {e}",
+                err=True,
+            )
+            typer.echo(
+                "   Traces and evaluations may not work until registration is completed.",
+                err=True,
+            )
+
+    if json_output:
+        result = {
+            "status": "success",
+            "target": "docc",
+            "workspace_name": agent_workspace_name,
+            "deployment_name": agent_deployment_name,
+            "docc_context": docc_config.context,
+            "docc_namespace": docc_config.namespace,
+            "service_address": service_address,
+        }
+        if registration_result:
+            result["workspace_uuid"] = registration_result.agent_workspace_uuid
+        output_json(result)
+    else:
+        typer.echo(
+            f"\nAgent deployed successfully to DOCC! "
+            f"({agent_workspace_name}/{agent_deployment_name})"
+        )
+        typer.echo(f"Service address: {service_address}")
+        if registration_result:
+            typer.echo(
+                f"Workspace UUID:  {registration_result.agent_workspace_uuid}"
+            )
+        typer.echo(
+            f"\nTo check status: docc --context {docc_config.context} "
+            f"inspect -n {docc_config.namespace} adk-{agent_workspace_name}"
+        )
+        typer.echo(
+            f"To view logs:    docc --context {docc_config.context} "
+            f"logs -n {docc_config.namespace} adk-{agent_workspace_name}"
+        )
 
 
 @agent_app.command("traces")

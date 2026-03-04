@@ -40,6 +40,8 @@ from .models import (
     GetEvaluationRunOutput,
     ListEvaluationMetricsOutput,
     DeleteAgentWorkspaceOutput,
+    RegisterExternalAgentDeploymentInput,
+    RegisterExternalAgentDeploymentOutput,
 )
 from .errors import (
     DOAPIAuthError,
@@ -509,6 +511,38 @@ class AsyncDigitalOceanGenAI:
         path = "/gen-ai/evaluation_metrics"
         data = await self._get_json(path)
         return ListEvaluationMetricsOutput(**data)
+
+    async def register_external_agent_deployment(
+        self, input_data: RegisterExternalAgentDeploymentInput
+    ) -> RegisterExternalAgentDeploymentOutput:
+        """Register an externally deployed agent (e.g. deployed via DOCC).
+
+        This creates the workspace/deployment/release records and sets the
+        release URL to the external address, enabling the platform-gateway
+        to route traffic and traces/evals to work.
+
+        Args:
+            input_data: Registration details including workspace name,
+                        deployment name, and external URL.
+
+        Returns:
+            RegisterExternalAgentDeploymentOutput with workspace/deployment/release UUIDs.
+        """
+        logger.debug(
+            "Registering external agent deployment",
+            agent_workspace_name=input_data.agent_workspace_name,
+            agent_deployment_name=input_data.agent_deployment_name,
+            external_url=input_data.external_url,
+            deployment_target=input_data.deployment_target,
+        )
+        path = (
+            f"/gen-ai/agent-workspaces/{input_data.agent_workspace_name}"
+            f"/agent-deployments/{input_data.agent_deployment_name}"
+            f"/register-external"
+        )
+        body = self._model_dump(input_data)
+        data = await self._post_json(path, body)
+        return RegisterExternalAgentDeploymentOutput(**data)
 
     async def delete_agent_workspace(
         self, agent_workspace_name: str

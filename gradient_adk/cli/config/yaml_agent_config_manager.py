@@ -5,7 +5,11 @@ from typing import Dict, Any, Optional
 import typer
 import yaml
 
-from gradient_adk.cli.config.agent_config_manager import AgentConfigManager
+from gradient_adk.cli.config.agent_config_manager import (
+    AgentConfigManager,
+    DeploymentTarget,
+    DOCCConfig,
+)
 
 
 class YamlAgentConfigManager(AgentConfigManager):
@@ -45,12 +49,33 @@ class YamlAgentConfigManager(AgentConfigManager):
         config = self.load_config()
         return config.get("description") if config else None
 
+    def get_deployment_target(self) -> DeploymentTarget:
+        config = self.load_config()
+        if not config:
+            return DeploymentTarget.GENAI_API
+        raw = config.get("deployment_target", "genai_api")
+        try:
+            return DeploymentTarget(raw)
+        except ValueError:
+            return DeploymentTarget.GENAI_API
+
+    def get_docc_config(self) -> Optional[DOCCConfig]:
+        config = self.load_config()
+        if not config or "docc" not in config:
+            return None
+        try:
+            return DOCCConfig(**config["docc"])
+        except Exception:
+            return None
+
     def configure(
         self,
         agent_name: Optional[str] = None,
         agent_environment: Optional[str] = None,
         entrypoint_file: Optional[str] = None,
         description: Optional[str] = None,
+        deployment_target: Optional[DeploymentTarget] = None,
+        docc_config: Optional[DOCCConfig] = None,
         interactive: bool = True,
     ) -> None:
         """Configure agent settings and save to YAML file."""
@@ -72,7 +97,22 @@ class YamlAgentConfigManager(AgentConfigManager):
                 entrypoint_file = typer.prompt(
                     "Entrypoint file (e.g., main.py, agent.py)", default="main.py"
                 )
-            # Note: description is optional and not prompted for in interactive mode
+            if deployment_target is None:
+                target_choice = typer.prompt(
+                    "Deployment target (genai_api or docc)",
+                    default="genai_api",
+                )
+                try:
+                    deployment_target = DeploymentTarget(target_choice)
+                except ValueError:
+                    typer.echo(
+                        f"Invalid deployment target '{target_choice}'. Using 'genai_api'.",
+                        err=True,
+                    )
+                    deployment_target = DeploymentTarget.GENAI_API
+
+            if deployment_target == DeploymentTarget.DOCC and docc_config is None:
+                docc_config = self._prompt_docc_config()
         else:
             if not all([agent_name, agent_environment, entrypoint_file]):
                 typer.echo(
@@ -98,6 +138,9 @@ class YamlAgentConfigManager(AgentConfigManager):
                 )
                 raise typer.Exit(1)
 
+            if deployment_target is None:
+                deployment_target = DeploymentTarget.GENAI_API
+
         # Validate description length if provided
         if description is not None and len(description) > 1000:
             typer.echo(
@@ -107,7 +150,14 @@ class YamlAgentConfigManager(AgentConfigManager):
             raise typer.Exit(1)
 
         self._validate_entrypoint_file(entrypoint_file)
-        self._save_config(agent_name, agent_environment, entrypoint_file, description)
+        self._save_config(
+            agent_name,
+            agent_environment,
+            entrypoint_file,
+            description,
+            deployment_target,
+            docc_config,
+        )
 
     def _validate_name(self, name: str) -> bool:
         """Validate that a name only contains alphanumeric characters, hyphens, and underscores."""
@@ -172,12 +222,41 @@ class YamlAgentConfigManager(AgentConfigManager):
             "Note: Entrypoint functions must accept exactly 2 parameters (data, context)."
         )
 
+    def _prompt_docc_config(self) -> DOCCConfig:
+        """Interactively prompt for DOCC-specific configuration."""
+        context = typer.prompt("DOCC cluster context (e.g. puff, wolf, flux)")
+        namespace = typer.prompt("DOCC namespace", default="gen-ai")
+        service_id = typer.prompt(
+            "Service catalog UUID (or press Enter to auto-generate)",
+            default="",
+        )
+        scale = typer.prompt("Number of replicas", default=2, type=int)
+        image_registry = typer.prompt(
+            "Docker image registry base path",
+            default="docker.internal.digitalocean.com/gen-ai/adk-agents",
+        )
+        maintainer = typer.prompt(
+            "Maintainer email",
+            default="gen-ai-engineering@digitalocean.com",
+        )
+
+        return DOCCConfig(
+            context=context,
+            namespace=namespace,
+            service_id=service_id if service_id else None,
+            scale=scale,
+            image_registry=image_registry,
+            maintainer=maintainer,
+        )
+
     def _save_config(
         self,
         agent_name: str,
         agent_environment: str,
         entrypoint_file: str,
         description: Optional[str] = None,
+        deployment_target: Optional[DeploymentTarget] = None,
+        docc_config: Optional[DOCCConfig] = None,
     ) -> None:
         """Save configuration to YAML file."""
         config = {
@@ -186,9 +265,14 @@ class YamlAgentConfigManager(AgentConfigManager):
             "entrypoint_file": entrypoint_file,
         }
 
-        # Only include description if provided
         if description is not None:
             config["description"] = description
+
+        if deployment_target is not None:
+            config["deployment_target"] = deployment_target.value
+
+        if docc_config is not None:
+            config["docc"] = docc_config.model_dump(exclude_none=True)
 
         try:
             with open(self.config_file, "w") as f:
@@ -199,6 +283,11 @@ class YamlAgentConfigManager(AgentConfigManager):
             typer.echo(f"  Entrypoint: {entrypoint_file}")
             if description:
                 typer.echo(f"  Description: {description[:50]}{'...' if len(description) > 50 else ''}")
+            if deployment_target:
+                typer.echo(f"  Deployment target: {deployment_target.value}")
+            if docc_config:
+                typer.echo(f"  DOCC context: {docc_config.context}")
+                typer.echo(f"  DOCC namespace: {docc_config.namespace}")
         except Exception as e:
             typer.echo(f"Error writing configuration file: {e}", err=True)
             raise typer.Exit(1)

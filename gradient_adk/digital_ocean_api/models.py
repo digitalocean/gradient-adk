@@ -1042,3 +1042,36 @@ class DeleteAgentWorkspaceOutput(BaseModel):
     agent_workspace_name: str = Field(
         ..., description="The name of the deleted agent workspace"
     )
+
+
+class RegisterExternalAgentDeploymentInput(BaseModel):
+    """
+    Input for registering an externally deployed agent (e.g. via DOCC).
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    agent_workspace_name: str = Field(..., description="The agent workspace name")
+    agent_deployment_name: str = Field(..., description="The deployment name")
+    external_url: str = Field(
+        ..., description="The URL where the externally deployed agent is reachable"
+    )
+    deployment_target: str = Field(
+        default="docc", description="The deployment platform (e.g. 'docc')"
+    )
+    project_id: Optional[str] = Field(None, description="DigitalOcean project ID")
+    description: Optional[str] = Field(
+        None, description="Description of the deployment"
+    )
+
+
+class RegisterExternalAgentDeploymentOutput(BaseModel):
+    """
+    Response for registering an externally deployed agent.
+    """
+
+    model_config = ConfigDict(populate_by_name=True, extra="allow")
+
+    agent_workspace_uuid: str = Field(..., description="Workspace UUID")
+    agent_deployment_uuid: str = Field(..., description="Deployment UUID")
+    agent_deployment_release_uuid: str = Field(..., description="Release UUID")
