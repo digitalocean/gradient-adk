@@ -28,6 +28,9 @@ dependencies = [
   "gradient>=3.10.1",
 ]
 
+[project.optional-dependencies]
+a2a = ["a2a-sdk[http-server]>=0.3.0"]
+
 [project.scripts]
 gradient = "gradient_adk.cli:run"
 
