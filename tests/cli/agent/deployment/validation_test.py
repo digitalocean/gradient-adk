@@ -37,9 +37,9 @@ def test_validation_fails_when_entrypoint_missing(temp_agent_dir):
     assert "Entrypoint file not found" in str(exc_info.value)
 
 
-def test_validation_fails_when_requirements_missing(temp_agent_dir):
-    """Test that validation fails when requirements.txt is missing."""
-    # Create minimal structure without requirements.txt
+def test_validation_fails_when_dependency_file_missing(temp_agent_dir):
+    """Test that validation fails when no dependency file exists."""
+    # Create minimal structure without requirements.txt or pyproject.toml
     (temp_agent_dir / ".gradient").mkdir()
     (temp_agent_dir / ".gradient" / "agent.yml").write_text("workspace_name: test\n")
     (temp_agent_dir / "main.py").write_text("# placeholder\n")
@@ -47,7 +47,7 @@ def test_validation_fails_when_requirements_missing(temp_agent_dir):
     with pytest.raises(ValidationError) as exc_info:
         validate_agent_entrypoint(temp_agent_dir, "main.py", verbose=False)
 
-    assert "No requirements.txt found" in str(exc_info.value)
+    assert "No requirements.txt or pyproject.toml found" in str(exc_info.value)
 
 
 def test_validation_fails_when_config_missing(temp_agent_dir):

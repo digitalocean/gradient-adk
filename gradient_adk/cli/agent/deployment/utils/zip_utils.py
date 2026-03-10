@@ -28,10 +28,33 @@ class DirectoryZipCreator:
             exclude_patterns: List of patterns to exclude (e.g., ['*.zip', 'env/', '__pycache__/'])
         """
         self.exclude_patterns = exclude_patterns or [
+            # Archive files
             "*.zip",
+            # Virtual environments
             "env/",
+            "venv/",
+            ".venv/",
+            # Python cache
             "__pycache__/",
+            "*.pyc",
+            # Package build artifacts
+            "*.egg-info/",
+            "dist/",
+            "build/",
+            # Version control
             ".git/",
+            # UV/package manager artifacts
+            ".uv/",
+            # IDE/Editor files
+            ".idea/",
+            ".vscode/",
+            # Node.js (in case of mixed projects)
+            "node_modules/",
+            # Test/coverage artifacts
+            ".pytest_cache/",
+            ".mypy_cache/",
+            "htmlcov/",
+            ".coverage",
         ]
 
     def create_zip(self, source_dir: Path, output_path: Path) -> Path:

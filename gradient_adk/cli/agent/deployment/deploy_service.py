@@ -16,12 +16,17 @@ from gradient_adk.digital_ocean_api.models import (
     GetAgentWorkspaceDeploymentOutput,
     GetAgentWorkspaceOutput,
     PresignedUrlFile,
+    PythonEnvironmentConfig,
     ReleaseStatus,
 )
 from gradient_adk.digital_ocean_api.errors import DOAPIClientError
 
 from .utils.zip_utils import ZipCreator, DirectoryZipCreator
 from .utils.s3_utils import S3Uploader, HttpxS3Uploader
+from .python_environment_detector import (
+    PythonEnvironmentDetector,
+    PythonEnvironmentDetectionError,
+)
 
 logger = get_logger(__name__)
 
@@ -115,6 +120,10 @@ class AgentDeployService:
         if not self.quiet:
             print("Starting agent deployment...")
 
+        # Detect Python environment configuration
+        env_detector = PythonEnvironmentDetector()
+        python_env_config = env_detector.detect(source_dir)
+
         #: Check if workspace and deployment exist
         workspace_exists, deployment_exists = await self._check_existing_resources(
             agent_workspace_name, agent_deployment_name
@@ -139,6 +148,7 @@ class AgentDeployService:
                 code_artifact=code_artifact,
                 project_id=project_id,
                 description=description,
+                python_environment_config=python_env_config,
             )
 
             # Poll for deployment completion
@@ -319,6 +329,7 @@ class AgentDeployService:
         code_artifact: AgentDeploymentCodeArtifact,
         project_id: str,
         description: str | None = None,
+        python_environment_config: PythonEnvironmentConfig | None = None,
     ) -> str:
         """Create or update the deployment based on what exists.
 
@@ -330,6 +341,7 @@ class AgentDeployService:
             code_artifact: Code artifact metadata
             project_id: Project ID
             description: Optional description for the deployment
+            python_environment_config: Optional Python environment configuration
 
         Returns:
             UUID of the created release
@@ -344,6 +356,7 @@ class AgentDeployService:
                 project_id=project_id,
                 library_version=_get_adk_version(),
                 description=description,
+                python_environment_config=python_environment_config,
             )
             workspace_output = await self.client.create_agent_workspace(workspace_input)
 
@@ -371,6 +384,7 @@ class AgentDeployService:
                 agent_deployment_code_artifact=code_artifact,
                 library_version=_get_adk_version(),
                 description=description,
+                python_environment_config=python_environment_config,
             )
             deployment_output = await self.client.create_agent_workspace_deployment(
                 deployment_input
@@ -389,6 +403,7 @@ class AgentDeployService:
                 agent_deployment_name=agent_deployment_name,
                 agent_deployment_code_artifact=code_artifact,
                 library_version=_get_adk_version(),
+                python_environment_config=python_environment_config,
             )
             release_output = await self.client.create_agent_deployment_release(
                 release_input
