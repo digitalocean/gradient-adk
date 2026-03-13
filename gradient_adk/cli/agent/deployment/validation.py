@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Optional
 import sys
 
+from gradient_adk.cli.agent.deployment.utils.gradientignore import load_gradientignore
+
 
 class ValidationError(Exception):
     """Raised when agent validation fails."""
@@ -194,7 +196,9 @@ except Exception as e:
             else:
                 raise ValidationError(
                     f"Failed to import entrypoint:\n{error_output}\n\n"
-                    f"The agent code has errors or missing dependencies."
+                    f"The agent code has errors or missing dependencies.\n"
+                    f"If the agent runs locally, check .gradient/.gradientignore to ensure "
+                    f"you are not accidentally excluding files needed for deployment."
                 )
 
         if verbose:
@@ -214,7 +218,9 @@ except Exception as e:
         raise ValidationError(
             f"Validation failed with unexpected error:\n"
             f"  {type(e).__name__}: {e}\n\n"
-            f"Try running 'gradient agent run' locally to debug the issue."
+            f"Try running 'gradient agent run' locally to debug the issue.\n"
+            f"If the agent runs locally, check .gradient/.gradientignore to ensure "
+            f"you are not accidentally excluding files needed for deployment."
         )
     finally:
         # Clean up temp directory
@@ -229,32 +235,26 @@ except Exception as e:
 
 
 def _copy_source_files(source_dir: Path, dest_dir: Path, verbose: bool = False) -> None:
-    """Copy source files to destination, excluding common patterns."""
+    """Copy source files to destination, excluding patterns from .gradientignore."""
 
-    # Common exclusions
-    exclude_patterns = {
-        "__pycache__",
-        "*.pyc",
-        ".git",
-        ".venv",
-        "venv",
-        "env",
-        "node_modules",
-        ".pytest_cache",
-        ".mypy_cache",
-        "*.egg-info",
-        "dist",
-        "build",
-    }
+    exclude_patterns = load_gradientignore(source_dir)
 
     def should_exclude(path: Path) -> bool:
-        """Check if a path should be excluded."""
+        """Check if a path should be excluded based on .gradientignore patterns."""
+        name = path.name
         for pattern in exclude_patterns:
-            if pattern.startswith("*"):
-                if path.name.endswith(pattern[1:]):
+            if pattern.endswith("/"):
+                # Directory pattern
+                if name == pattern.rstrip("/"):
                     return True
-            elif path.name == pattern:
-                return True
+            elif pattern.startswith("*"):
+                # Extension pattern
+                if name.endswith(pattern[1:]):
+                    return True
+            else:
+                # Exact match
+                if name == pattern:
+                    return True
         return False
 
     # Copy files and directories

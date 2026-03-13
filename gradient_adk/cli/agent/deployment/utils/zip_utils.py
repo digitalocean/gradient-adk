@@ -25,14 +25,18 @@ class DirectoryZipCreator:
         """Initialize the zip creator.
 
         Args:
-            exclude_patterns: List of patterns to exclude (e.g., ['*.zip', 'env/', '__pycache__/'])
+            exclude_patterns: List of patterns to exclude (e.g., ['*.zip', 'env/', '__pycache__/']).
+                              Pass None to use built-in defaults. Pass [] to exclude nothing.
         """
-        self.exclude_patterns = exclude_patterns or [
-            "*.zip",
-            "env/",
-            "__pycache__/",
-            ".git/",
-        ]
+        if exclude_patterns is None:
+            self.exclude_patterns = [
+                "*.zip",
+                "env/",
+                "__pycache__/",
+                ".git/",
+            ]
+        else:
+            self.exclude_patterns = exclude_patterns
 
     def create_zip(self, source_dir: Path, output_path: Path) -> Path:
         """Create a zip archive from a directory, excluding certain patterns.
