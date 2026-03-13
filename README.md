@@ -334,15 +334,42 @@ export A2A_BASE_URL=https://your-app.ondigitalocean.app
 
 ```
 my-agent/
-├── main.py              # Agent entrypoint with @entrypoint decorator
-├── .gradient/agent.yml  # Agent configuration (auto-generated)
-├── requirements.txt     # Python dependencies
-├── .env                 # Environment variables (not committed)
-├── agents/              # Agent implementations
+├── main.py                       # Agent entrypoint with @entrypoint decorator
+├── .gradient/
+│   ├── agent.yml                 # Agent configuration (auto-generated)
+│   └── .gradientignore           # Controls which files are excluded from deployment
+├── requirements.txt              # Python dependencies
+├── .env                          # Environment variables (not committed)
+├── agents/                       # Agent implementations
 │   └── my_agent.py
-└── tools/               # Custom tools
+└── tools/                        # Custom tools
     └── my_tool.py
 ```
+
+### Controlling Deployment Contents (`.gradientignore`)
+
+When you deploy with `gradient agent deploy`, the CLI zips your project directory and uploads it. The file `.gradient/.gradientignore` controls which files and directories are excluded from that zip. It is created automatically with sensible defaults when you run `gradient agent init`.
+
+The syntax is one pattern per line:
+
+```
+# Comments start with #
+dir_name/     # Exclude directories with this name anywhere in the tree
+*.ext         # Exclude files matching this extension
+exact_name    # Exclude exact file or directory name matches
+```
+
+The default `.gradientignore` excludes virtual environments (`env/`, `venv/`, `.venv/`), Python caches (`__pycache__/`, `*.pyc`), version control (`.git/`), build artifacts (`dist/`, `build/`, `*.egg-info`), test caches (`.pytest_cache/`, `.mypy_cache/`), and zip files (`*.zip`).
+
+To customize, edit `.gradient/.gradientignore` directly. For example, to also exclude a local test data directory:
+
+```
+# ... existing patterns ...
+test_data/
+scripts/
+```
+
+This is intentionally separate from `.gitignore` because that files you track in git (like setup scripts or test fixtures) may not be needed in your deployed agent.
 
 ## Framework Compatibility
 
