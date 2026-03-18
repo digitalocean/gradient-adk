@@ -44,6 +44,7 @@ Each entry in `parameters` describes one user-facing input:
 | `label` | string | yes | Display label for CLI prompt or form field |
 | `type` | string | yes | Input type (see supported types below) |
 | `required` | boolean | yes | Whether the user must provide a value |
+| `multiple` | boolean | no | If true, the parameter accepts zero, one, or many values (e.g. multiple KBs, multiple tools). Default false. |
 | `default` | any | no | Default value if user doesn't provide one |
 | `description` | string | no | Help text shown to the user |
 | `source` | string | no | Dynamic data source (e.g. `serverless_inference_models`) |
@@ -81,11 +82,13 @@ Consumers (CLI, Console, renderer) interpret this config to produce the appropri
 
 ## Example: Knowledge Base RAG Template
 
+
+
 ```yaml
 schema_version: v1
 template_id: knowledge-base-rag
 name: Knowledge Base RAG Agent
-description: Answer questions using a selected knowledge base.
+description: Answer questions using selected knowledge bases.
 category: rag
 
 parameters:
@@ -96,12 +99,13 @@ parameters:
     source: serverless_inference_models
     description: Model used for inference through Serverless Inference.
 
-  - name: knowledge_base_id
-    label: Knowledge Base
+  - name: knowledge_base_ids
+    label: Knowledge Bases
     type: resource_select
     resource_type: knowledge_base
-    required: true
-    description: The knowledge base this agent will query.
+    multiple: true
+    required: false
+    description: Knowledge bases this agent can query.
 
   - name: system_prompt
     label: System Prompt
@@ -113,6 +117,7 @@ parameters:
   - name: tools
     label: Function Tools
     type: tool_select
+    multiple: true
     required: false
     description: Tools the agent can call during execution.
 
@@ -121,17 +126,18 @@ secrets:
     label: Gradient Model Access Key
     required: true
     description: API key for Serverless Inference model access.
+
   - env: DIGITALOCEAN_API_TOKEN
     label: DigitalOcean API Token
     required: true
-    description: API token for accessing DigitalOcean resources (e.g. Knowledge Bases).
+    description: API token for accessing DigitalOcean resources.
 
 agent_config:
   model: ${model}
   prompt:
     system: ${system_prompt}
   retrieval:
-    knowledge_base_id: ${knowledge_base_id}
+    knowledge_base_ids: ${knowledge_base_ids}
   tools: ${tools}
 
 metadata:
