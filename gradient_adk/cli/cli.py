@@ -9,6 +9,11 @@ import importlib.metadata
 
 from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigManager
 from gradient_adk.cli.agent.deployment.deploy_service import AgentDeployService
+from gradient_adk.cli.agent.deployment.utils.zip_utils import DirectoryZipCreator
+from gradient_adk.cli.agent.deployment.utils.gradientignore import (
+    load_gradientignore,
+    ensure_gradientignore,
+)
 from gradient_adk.cli.agent.direct_launch_service import DirectLaunchService
 from gradient_adk.cli.agent.traces_service import GalileoTracesService
 from gradient_adk.cli.agent.evaluation_service import (
@@ -177,6 +182,9 @@ gradient
     if not env_path.exists():
         env_content = ""
         env_path.write_text(env_content)
+
+    # Create .gradient/.gradientignore with default exclude patterns
+    ensure_gradientignore(pathlib.Path.cwd())
 
 
 # Default description for agents created with `gradient agent init`
@@ -464,8 +472,12 @@ def agent_deploy(
                 # Get description from config (optional)
                 description = _agent_config_manager.get_description()
 
-                # Create deploy service with injected client
-                deploy_service = AgentDeployService(client=client, quiet=json_output)
+                # Load .gradientignore patterns and create deploy service
+                exclude_patterns = load_gradientignore(Path.cwd())
+                zip_creator = DirectoryZipCreator(exclude_patterns=exclude_patterns)
+                deploy_service = AgentDeployService(
+                    client=client, zip_creator=zip_creator, quiet=json_output
+                )
 
                 # Deploy from current directory
                 workspace_uuid = await deploy_service.deploy_agent(
@@ -542,6 +554,12 @@ def agent_deploy(
 
         typer.echo(
             "\nEnsure that your agent can start up successfully with the correct environment variables prior to deploying.",
+            err=True,
+        )
+        typer.echo(
+            "\nIf your deployment is timing out, check .gradient/.gradientignore to make sure "
+            "you are excluding files not needed for deployment (e.g. virtual environments, "
+            "large data files).",
             err=True,
         )
         raise typer.Exit(1)
