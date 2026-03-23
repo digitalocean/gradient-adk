@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "gradient-adk"
 version = "0.0.8"
 description = "Gradient AI Platform Agent Development Kit"
-requires-python = ">=3.10"
+requires-python = ">=3.10, <4.0"
 readme = "README.md"
 license = "Apache-2.0"
 dependencies = [
@@ -30,6 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 a2a = ["a2a-sdk[http-server]>=0.3.0"]
+eval = ["deepeval>=3.9.1", "litellm>=1.82.6"]
 
 [project.scripts]
 gradient = "gradient_adk.cli:run"

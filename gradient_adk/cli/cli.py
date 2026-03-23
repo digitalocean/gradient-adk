@@ -799,10 +799,43 @@ def agent_evaluate(
     interactive: bool = typer.Option(
         True, "--interactive/--no-interactive", help="Interactive prompt mode"
     ),
+    # --- Local evaluation flags ---
+    local: bool = typer.Option(
+        False, "--local", help="Run evaluation locally using DeepEval"
+    ),
+    preset: Optional[str] = typer.Option(
+        None, "--preset", help="Metric preset: basic, rag, agent, all"
+    ),
+    metrics: Optional[str] = typer.Option(
+        None, "--metrics", help="Comma-separated metric names"
+    ),
+    judge_model: Optional[str] = typer.Option(
+        None, "--judge-model", help="Override judge model"
+    ),
+    threshold: Optional[float] = typer.Option(
+        None, "--threshold", help="Global pass/fail threshold"
+    ),
+    verbose: bool = typer.Option(
+        False, "--verbose", help="Show per-row breakdown in local eval"
+    ),
 ):
     """Run an evaluation test case for the agent."""
     import asyncio
     from pathlib import Path
+
+    # ---- Local evaluation path ----
+    if local:
+        _run_local_eval(
+            dataset_file=dataset_file,
+            preset=preset,
+            metrics=metrics,
+            judge_model=judge_model,
+            threshold=threshold,
+            verbose=verbose,
+        )
+        return
+
+    # ---- Remote evaluation path (existing) ----
     from gradient_adk.digital_ocean_api.client_async import AsyncDigitalOceanGenAI
     from gradient_adk.cli.agent.evaluation_service import EvaluationService
     from gradient_adk.digital_ocean_api.models import EvaluationMetricValueType
@@ -1091,6 +1124,108 @@ def agent_evaluate(
         raise typer.Exit(1)
     except Exception as e:
         typer.echo(f"❌ Evaluation failed: {e}", err=True)
+        raise typer.Exit(1)
+
+
+def _run_local_eval(
+    *,
+    dataset_file: Optional[str],
+    preset: Optional[str],
+    metrics: Optional[str],
+    judge_model: Optional[str],
+    threshold: Optional[float],
+    verbose: bool,
+) -> None:
+    """Run local evaluation using DeepEval."""
+    import asyncio
+    import os
+    from pathlib import Path
+
+    # Load .env file if present (same pattern as agent init/launch)
+    env_path = Path(".env")
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, _, value = line.partition("=")
+                os.environ.setdefault(key.strip(), value.strip())
+
+    # Map common DO key name if GRADIENT_MODEL_ACCESS_KEY isn't set
+    if not os.environ.get("GRADIENT_MODEL_ACCESS_KEY"):
+        do_key = os.environ.get("DIGITALOCEAN_INFERENCE_KEY", "")
+        if do_key:
+            os.environ["GRADIENT_MODEL_ACCESS_KEY"] = do_key
+
+    try:
+        from gradient_adk.evaluation.config import load_eval_config
+        from gradient_adk.evaluation.runner import run_local_evaluation
+        from gradient_adk.evaluation.results import format_results
+    except ImportError as e:
+        typer.echo(
+            f"Local evaluation requires the 'eval' extra: pip install gradient-adk[eval]\n{e}",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # Get entrypoint from agent config
+    entrypoint_file = _agent_config_manager.get_entrypoint_file()
+    if not entrypoint_file:
+        typer.echo(
+            "No entrypoint_file found in .gradient/agent.yml. "
+            "Run 'gradient agent configure' first.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # Load eval config
+    eval_yml = Path(".gradient") / "eval.yml"
+    config = load_eval_config(
+        yaml_path=eval_yml,
+        cli_preset=preset,
+        cli_judge_model=judge_model,
+        cli_threshold=threshold,
+        cli_dataset=dataset_file,
+    )
+
+    # Resolve dataset path
+    ds_path = Path(config.dataset or dataset_file or "dataset.csv")
+    if not ds_path.exists():
+        typer.echo(f"Dataset not found: {ds_path}", err=True)
+        typer.echo("Specify with --dataset-file <path>", err=True)
+        raise typer.Exit(1)
+
+    # Resolve metric names
+    metric_names = None
+    if metrics:
+        metric_names = [m.strip() for m in metrics.split(",")]
+
+    api_key = config.judge_api_key
+    if not api_key:
+        typer.echo(
+            f"No API key found. Set {config.judge_api_key_env} in your environment.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    typer.echo(f"Judge model:  {config.judge_model}")
+    typer.echo(f"Preset:       {config.preset}")
+    typer.echo(f"Dataset:      {ds_path}")
+    typer.echo(f"Entrypoint:   {entrypoint_file}")
+    typer.echo()
+
+    async def _run():
+        return await run_local_evaluation(
+            entrypoint_file=entrypoint_file,
+            config=config,
+            dataset_path=ds_path,
+            metric_names=metric_names,
+        )
+
+    results = asyncio.run(_run())
+    typer.echo(format_results(results, verbose=verbose))
+
+    all_passed = all(ms.passed for ms in results.metric_summaries)
+    if not all_passed:
         raise typer.Exit(1)
 
 

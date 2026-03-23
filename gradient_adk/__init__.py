@@ -4,6 +4,7 @@ and the CLI (gradient command).
 """
 
 from .decorator import entrypoint, RequestContext
+from .evaluation.record import eval_record, EvalRecord
 from .tracing import (
     # Decorators
     trace_llm,
@@ -18,6 +19,9 @@ from .tracing import (
 __all__ = [
     "entrypoint",
     "RequestContext",
+    # Evaluation
+    "eval_record",
+    "EvalRecord",
     # Decorators
     "trace_llm",
     "trace_retriever",

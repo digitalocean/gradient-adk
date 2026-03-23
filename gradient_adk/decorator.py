@@ -166,6 +166,13 @@ def entrypoint(func: Callable) -> Callable:
 
         is_evaluation = "evaluation-id" in req.headers
 
+        # Wire EvalRecord for local evaluation
+        eval_request_id = req.headers.get("x-eval-request-id")
+        eval_token = None
+        if is_evaluation and eval_request_id:
+            from gradient_adk.evaluation.record import _begin_eval_request
+            eval_token = _begin_eval_request(eval_request_id)
+
         context = _build_request_context(req)
         session_id = context.session_id
 
@@ -196,6 +203,9 @@ def entrypoint(func: Callable) -> Callable:
                         tr.on_request_end(outputs=None, error=str(e))
                     except Exception:
                         pass
+                if eval_token is not None:
+                    from gradient_adk.evaluation.record import _end_eval_request
+                    _end_eval_request(eval_token)
                 logger.error("Error creating generator", error=str(e), exc_info=True)
                 raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -228,6 +238,9 @@ def entrypoint(func: Callable) -> Callable:
                             pass
 
                     headers = {"X-Gradient-Trace-Id": trace_id} if trace_id else {}
+                    if eval_token is not None:
+                        from gradient_adk.evaluation.record import _end_eval_request
+                        _end_eval_request(eval_token)
                     return JSONResponse(content=result, headers=headers)
 
                 except Exception as e:
@@ -238,6 +251,9 @@ def entrypoint(func: Callable) -> Callable:
                             await tr._submit()
                         except Exception:
                             pass
+                    if eval_token is not None:
+                        from gradient_adk.evaluation.record import _end_eval_request
+                        _end_eval_request(eval_token)
                     logger.error(
                         "Error in streaming evaluation", error=str(e), exc_info=True
                     )
@@ -273,6 +289,9 @@ def entrypoint(func: Callable) -> Callable:
                     tr.on_request_end(outputs=None, error=str(e))
                 except Exception:
                     pass
+            if eval_token is not None:
+                from gradient_adk.evaluation.record import _end_eval_request
+                _end_eval_request(eval_token)
             logger.error("Error in /run", error=str(e), exc_info=True)
             raise HTTPException(status_code=500, detail="Internal server error")
 
@@ -285,6 +304,10 @@ def entrypoint(func: Callable) -> Callable:
                     trace_id = await tr.submit_and_get_trace_id()
             except Exception:
                 pass
+
+        if eval_token is not None:
+            from gradient_adk.evaluation.record import _end_eval_request
+            _end_eval_request(eval_token)
 
         if trace_id:
             from fastapi.responses import JSONResponse
