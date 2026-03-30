@@ -1,0 +1,20 @@
+# Gradient ADK — Local Evaluation Configuration
+
+# Judge model for LLM-as-judge evaluation (uses DO serverless inference)
+judge_model: "openai/openai-gpt-oss-120b"
+judge_base_url: "https://inference.do-ai.run/v1"
+judge_api_key_env: "GRADIENT_MODEL_ACCESS_KEY"
+
+# Default metric preset: basic | rag | agent | all
+preset: "basic"
+
+# Per-metric threshold overrides (default: 0.5)
+# thresholds:
+#   answer_relevancy: 0.7
+#   faithfulness: 0.8
+
+# Per-metric judge model overrides
+# metrics:
+#   faithfulness:
+#     threshold: 0.8
+#     judge_model: "openai/meta-llama/Meta-Llama-3.1-405B-Instruct"
