@@ -47,6 +47,12 @@ Building AI agents is challenging enough without worrying about observability, e
 pip install gradient-adk
 ```
 
+To use local evaluations (powered by DeepEval), install with the eval extra:
+
+```bash
+pip install gradient-adk[eval]
+```
+
 ## Quick Start
 
 > **🎥 Watch the [Getting Started Video](https://www.youtube.com/watch?v=23xiqgrGciE)** for a complete walkthrough
@@ -82,12 +88,22 @@ gradient agent deploy
 
 ### 4. Evaluate Your Agent
 
+Run evaluations against a deployed agent on DigitalOcean:
+
 ```bash
 gradient agent evaluate \
   --test-case-name "my-evaluation" \
   --dataset-file evaluation_dataset.csv \
   --categories correctness,context_quality
 ```
+
+Or run evaluations locally using DeepEval (no deployment needed):
+
+```bash
+gradient agent evaluate --local --preset basic --dataset-file dataset.csv
+```
+
+See the [Local Evaluations](#local-evaluations) section for full details.
 
 ## Usage Examples
 
@@ -192,7 +208,7 @@ gradient agent logs
 gradient agent traces
 ```
 
-### Evaluation
+### Remote Evaluation
 
 You can evaluate your deployed agent with a number of useful evaluation metrics. See the [DigitalOcean docs](https://docs.digitalocean.com/products/gradient-ai-platform/how-to/create-evaluation-datasets/#evaluation-datasets-for-agents-built-with-agent-development-kit) for details on what belongs in a dataset.
 
@@ -208,6 +224,181 @@ gradient agent evaluate \
   --star-metric-name "Correctness (general hallucinations)" \
   --success-threshold 80.0
 ```
+
+## Local Evaluations
+
+The ADK includes an integrated local evaluation framework powered by [DeepEval](https://github.com/confident-ai/deepeval). Run evaluations locally against your agent code — no deployment required. A judge LLM (via DigitalOcean Serverless Inference or any OpenAI-compatible endpoint) scores your agent's responses across a configurable set of metrics.
+
+### How It Works
+
+Local evaluation runs entirely in-process:
+
+1. `gradient agent evaluate --local` imports your agent module and gets the FastAPI app
+2. For each row in the dataset CSV, the runner sends a request to `/run` via ASGI transport (no network, no subprocess)
+3. The `@entrypoint` decorator detects eval headers and creates an `EvalRecord` via ContextVar
+4. Your agent code calls `eval_record()` to attach retrieval context and tool call data — these are silent no-ops in production
+5. After each response, the runner assembles DeepEval `LLMTestCase` objects and evaluates with the judge LLM
+6. Metrics that lack required data (e.g. `tool_correctness` without `expected_tools` in the CSV) are auto-skipped with actionable reasons
+
+### Installation
+
+```bash
+pip install gradient-adk[eval]
+```
+
+### Instrumenting Your Agent
+
+Import `eval_record` from `gradient_adk` and call it during request handling to record retrieval context and tool calls. In production (outside evaluation), these calls are silent no-ops with zero overhead.
+
+```python
+from gradient_adk import entrypoint, RequestContext, eval_record
+
+@entrypoint
+async def main(input: dict, context: RequestContext):
+    prompt = input.get("prompt", "")
+    rec = eval_record()
+
+    # Record a tool call and retrieval context
+    chunks = retrieve(prompt)
+    rec.add_tool_call("retrieve", args={"query": prompt}, output=chunks)
+    rec.add_context(chunks)
+
+    # ... call LLM, process response ...
+
+    answer = summarize(raw_answer)
+    rec.add_tool_call("summarize", args={"text": raw_answer}, output=answer)
+
+    return answer
+```
+
+- `rec.add_context(chunks)` — records retrieval context for faithfulness and contextual metrics
+- `rec.add_tool_call(name, args, output)` — records tool invocations for tool correctness metrics
+
+### Creating a Dataset
+
+Create a CSV file with at minimum a `query` column. Additional columns enable more metrics:
+
+| Column | Required | Format | Enables |
+|--------|----------|--------|---------|
+| `query` | Yes | JSON (e.g. `{"prompt": "What is Python?"}`) | All metrics |
+| `expected_output` | No | String | answer_relevancy |
+| `expected_context` | No | JSON list of strings | contextual_precision, contextual_recall |
+| `expected_tools` | No | JSON list of objects (e.g. `[{"name": "retrieve"}]`) | tool_correctness |
+
+Example `dataset.csv`:
+
+```csv
+query,expected_output,expected_context,expected_tools
+"{""prompt"": ""What is Python?""}",Python is a high-level interpreted programming language.,"[""Python is a high-level, interpreted programming language.""]","[{""name"": ""retrieve""}, {""name"": ""summarize""}]"
+```
+
+### Configuration
+
+Create `.gradient/eval.yml` in your project to configure the judge model, presets, and thresholds:
+
+```yaml
+# Judge model for LLM-as-judge evaluation (uses DO serverless inference).
+# The "openai/" prefix tells LiteLLM to use the OpenAI-compatible API format.
+# All DigitalOcean models are OpenAI API compliant, so the format is:
+#   openai/<DO_MODEL_NAME>
+judge_model: "openai/openai-gpt-oss-120b"
+judge_base_url: "https://inference.do-ai.run/v1"
+judge_api_key_env: "GRADIENT_MODEL_ACCESS_KEY"
+
+# Default metric preset: basic | rag | agent | all
+preset: "basic"
+
+# Per-metric threshold overrides (default: 0.5)
+thresholds:
+  answer_relevancy: 0.7
+  faithfulness: 0.8
+
+# Per-metric judge model overrides
+# metrics:
+#   faithfulness:
+#     threshold: 0.8
+#     judge_model: "openai/meta-llama/Meta-Llama-3.1-405B-Instruct"
+```
+
+All settings can be overridden via CLI flags. Precedence: CLI args > YAML > defaults.
+
+> **Note on model names:** The `openai/` prefix is a [LiteLLM routing convention](https://docs.litellm.ai/docs/providers/openai_compatible) that tells the evaluation framework to use the OpenAI-compatible chat completions format. It does not mean the model is hosted by OpenAI. All DigitalOcean Serverless Inference models are OpenAI API compliant, so the format is always `openai/<DO_MODEL_NAME>`.
+
+### Available Metrics
+
+Metrics are organized into three presets:
+
+| Preset | Metrics | Data Required |
+|--------|---------|---------------|
+| `basic` | answer_relevancy, bias, toxicity | Just input/output — zero config |
+| `rag` | faithfulness, contextual_relevancy, contextual_precision, contextual_recall | `eval_record().add_context()` + `expected_context` in CSV |
+| `agent` | tool_correctness | `eval_record().add_tool_call()` + `expected_tools` in CSV |
+| `all` | All 8 metrics | Auto-skips metrics missing required data |
+
+All scores are normalized so that **1.0 = best** for every metric (including bias and toxicity, where the underlying raw score is inverted).
+
+### Running Evaluations
+
+```bash
+# All 8 metrics, verbose per-row breakdown:
+gradient agent evaluate --local --preset all --dataset-file dataset.csv --verbose
+
+# Basic metrics only (no retrieval context or tool data needed):
+gradient agent evaluate --local --preset basic --dataset-file dataset.csv
+
+# RAG metrics only:
+gradient agent evaluate --local --preset rag --dataset-file dataset.csv
+
+# Specific metrics:
+gradient agent evaluate --local --metrics answer_relevancy,faithfulness,tool_correctness --dataset-file dataset.csv
+
+# Override judge model and threshold (openai/ prefix = LiteLLM OpenAI-compatible format):
+gradient agent evaluate --local --preset basic --dataset-file dataset.csv \
+  --judge-model "openai/meta-llama/Meta-Llama-3.1-405B-Instruct" \
+  --threshold 0.7
+```
+
+#### CLI Options
+
+| Flag | Description |
+|------|-------------|
+| `--local` | Run evaluation locally with DeepEval (required for local evals) |
+| `--dataset-file <path>` | Path to the CSV dataset file |
+| `--preset <name>` | Metric preset: `basic`, `rag`, `agent`, or `all` |
+| `--metrics <names>` | Comma-separated list of specific metrics to run |
+| `--judge-model <model>` | Override the judge model (format: `openai/<DO_MODEL_NAME>`) |
+| `--threshold <float>` | Global pass/fail threshold (default: 0.5) |
+| `--verbose` | Show per-row score breakdown |
+
+### Example Output
+
+```
+Judge model:  openai/openai-gpt-oss-120b
+Preset:       all
+Dataset:      dataset.csv
+Entrypoint:   agent.py
+
+============================================================
+  Evaluation Results
+============================================================
+
+  Metric                        Score   Threshold  Result
+  --------------------------------------------------------
+  answer_relevancy              1.00        0.50    PASS
+  bias                          1.00        0.50    PASS
+  toxicity                      1.00        0.50    PASS
+  faithfulness                  1.00        0.50    PASS
+  contextual_relevancy          1.00        0.50    PASS
+  contextual_precision          1.00        0.50    PASS
+  contextual_recall             1.00        0.50    PASS
+  tool_correctness              1.00        0.50    PASS
+
+============================================================
+  8/8 metrics passed across 3 test case(s)
+  Total time: 11.2s
+============================================================
+```
+
 
 ## Tracing
 
@@ -337,7 +528,9 @@ my-agent/
 ├── main.py                       # Agent entrypoint with @entrypoint decorator
 ├── .gradient/
 │   ├── agent.yml                 # Agent configuration (auto-generated)
+│   ├── eval.yml                  # Local evaluation configuration (optional)
 │   └── .gradientignore           # Controls which files are excluded from deployment
+├── dataset.csv                   # Evaluation dataset (optional)
 ├── requirements.txt              # Python dependencies
 ├── .env                          # Environment variables (not committed)
 ├── agents/                       # Agent implementations
