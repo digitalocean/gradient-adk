@@ -1,5 +1,4 @@
 # Gradient ADK — Local Evaluation Configuration
-# Docs: https://docs.digitalocean.com/products/gradient/adk/evaluation/
 
 # Judge model for LLM-as-judge evaluation (uses DO serverless inference)
 judge_model: "openai/openai-gpt-oss-120b"
