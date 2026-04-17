@@ -469,8 +469,9 @@ def agent_deploy(
                     )
                     raise typer.Exit(1)
 
-                # Get description from config (optional)
+                # Get optional config values
                 description = _agent_config_manager.get_description()
+                region = _agent_config_manager.get_region()
 
                 # Load .gradientignore patterns and create deploy service
                 exclude_patterns = load_gradientignore(Path.cwd())
@@ -487,6 +488,7 @@ def agent_deploy(
                     project_id=project_id,
                     api_token=api_token,
                     description=description,
+                    region=region,
                 )
 
                 invoke_url = f"https://agents.do-ai.run/v1/{workspace_uuid}/{agent_deployment_name}/run"

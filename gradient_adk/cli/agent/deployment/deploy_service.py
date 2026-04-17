@@ -44,6 +44,7 @@ class DeployService(Protocol):
         source_dir: Path,
         project_id: str,
         api_token: str,
+        region: str | None = None,
     ) -> None:
         """Deploy the agent to the configured environment."""
         ...
@@ -86,6 +87,7 @@ class AgentDeployService:
         project_id: str,
         api_token: str,
         description: str | None = None,
+        region: str | None = None,
     ) -> str:
         """Deploy an agent to the platform.
 
@@ -139,6 +141,7 @@ class AgentDeployService:
                 code_artifact=code_artifact,
                 project_id=project_id,
                 description=description,
+                region=region,
             )
 
             # Poll for deployment completion
@@ -319,6 +322,7 @@ class AgentDeployService:
         code_artifact: AgentDeploymentCodeArtifact,
         project_id: str,
         description: str | None = None,
+        region: str | None = None,
     ) -> str:
         """Create or update the deployment based on what exists.
 
@@ -344,6 +348,7 @@ class AgentDeployService:
                 project_id=project_id,
                 library_version=_get_adk_version(),
                 description=description,
+                region=region,
             )
             workspace_output = await self.client.create_agent_workspace(workspace_input)
 
@@ -371,6 +376,7 @@ class AgentDeployService:
                 agent_deployment_code_artifact=code_artifact,
                 library_version=_get_adk_version(),
                 description=description,
+                region=region,
             )
             deployment_output = await self.client.create_agent_workspace_deployment(
                 deployment_input
