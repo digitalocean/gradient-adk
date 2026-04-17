@@ -457,6 +457,9 @@ class CreateAgentWorkspaceDeploymentInput(BaseModel):
     library_version: Optional[str] = Field(
         None, description="Version of the ADK library used to create this deployment"
     )
+    region: Optional[str] = Field(
+        None, description="The region to deploy the agent in"
+    )
     description: Optional[str] = Field(
         None,
         description="Description of the agent deployment (max 1000 characters)",
@@ -542,6 +545,9 @@ class CreateAgentWorkspaceInput(BaseModel):
     project_id: str = Field(..., description="The project id")
     library_version: Optional[str] = Field(
         None, description="Version of the ADK library used to create this workspace"
+    )
+    region: Optional[str] = Field(
+        None, description="The region to deploy the agent in"
     )
     description: Optional[str] = Field(
         None,

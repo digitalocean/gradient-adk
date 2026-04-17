@@ -20,6 +20,9 @@ class AgentConfigManager:
     def get_description(self) -> Optional[str]:
         raise NotImplementedError
 
+    def get_region(self) -> Optional[str]:
+        raise NotImplementedError
+
     def configure(
         self,
         agent_name: Optional[str] = None,

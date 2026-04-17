@@ -45,12 +45,17 @@ class YamlAgentConfigManager(AgentConfigManager):
         config = self.load_config()
         return config.get("description") if config else None
 
+    def get_region(self) -> Optional[str]:
+        config = self.load_config()
+        return config.get("region") if config else None
+
     def configure(
         self,
         agent_name: Optional[str] = None,
         agent_environment: Optional[str] = None,
         entrypoint_file: Optional[str] = None,
         description: Optional[str] = None,
+        region: Optional[str] = None,
         interactive: bool = True,
     ) -> None:
         """Configure agent settings and save to YAML file."""
@@ -107,7 +112,7 @@ class YamlAgentConfigManager(AgentConfigManager):
             raise typer.Exit(1)
 
         self._validate_entrypoint_file(entrypoint_file)
-        self._save_config(agent_name, agent_environment, entrypoint_file, description)
+        self._save_config(agent_name, agent_environment, entrypoint_file, description, region)
 
     def _validate_name(self, name: str) -> bool:
         """Validate that a name only contains alphanumeric characters, hyphens, and underscores."""
@@ -178,6 +183,7 @@ class YamlAgentConfigManager(AgentConfigManager):
         agent_environment: str,
         entrypoint_file: str,
         description: Optional[str] = None,
+        region: Optional[str] = None,
     ) -> None:
         """Save configuration to YAML file."""
         config = {
@@ -186,9 +192,11 @@ class YamlAgentConfigManager(AgentConfigManager):
             "entrypoint_file": entrypoint_file,
         }
 
-        # Only include description if provided
         if description is not None:
             config["description"] = description
+
+        if region is not None:
+            config["region"] = region
 
         try:
             with open(self.config_file, "w") as f:
