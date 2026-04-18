@@ -36,9 +36,9 @@ def _get_adk_version() -> str:
 
 def _region_to_proto_enum(region: str | None) -> str | None:
     """Convert a short region string to the proto enum name expected by the API."""
-    if region is None:
+    if not region or not region.strip():
         return None
-    return f"AGENT_WORKSPACE_DEPLOYMENT_REGION_{region.upper()}"
+    return f"AGENT_WORKSPACE_DEPLOYMENT_REGION_{region.strip().upper()}"
 
 
 class DeployService(Protocol):
@@ -329,6 +329,7 @@ class AgentDeployService:
         code_artifact: AgentDeploymentCodeArtifact,
         project_id: str,
         description: str | None = None,
+        region: str | None = None,
     ) -> str:
         """Create or update the deployment based on what exists.
 
