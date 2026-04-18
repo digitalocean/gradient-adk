@@ -34,6 +34,13 @@ def _get_adk_version() -> str:
         return "unknown"
 
 
+def _region_to_proto_enum(region: str | None) -> str | None:
+    """Convert a short region string to the proto enum name expected by the API."""
+    if not region or not region.strip():
+        return None
+    return f"AGENT_WORKSPACE_DEPLOYMENT_REGION_{region.strip().upper()}"
+
+
 class DeployService(Protocol):
     """Protocol for agent deployment operations."""
 
@@ -348,7 +355,7 @@ class AgentDeployService:
                 project_id=project_id,
                 library_version=_get_adk_version(),
                 description=description,
-                region=region,
+                region=_region_to_proto_enum(region),
             )
             workspace_output = await self.client.create_agent_workspace(workspace_input)
 
@@ -376,7 +383,7 @@ class AgentDeployService:
                 agent_deployment_code_artifact=code_artifact,
                 library_version=_get_adk_version(),
                 description=description,
-                region=region,
+                region=_region_to_proto_enum(region),
             )
             deployment_output = await self.client.create_agent_workspace_deployment(
                 deployment_input
