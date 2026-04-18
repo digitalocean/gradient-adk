@@ -1,22 +1,20 @@
-![Header image for the DigitalOcean Gradient AI Agentic Cloud](https://doimages.nyc3.cdn.digitaloceanspaces.com/do_gradient_ai_agentic_cloud.svg)
-
-# DigitalOcean Gradient™ Agent Development Kit (ADK)
+# DigitalOcean Agent Development Kit (ADK)
 
 <!-- prettier-ignore -->
 [![PyPI version](https://img.shields.io/pypi/v/gradient-adk.svg?label=pypi%20(stable))](https://pypi.org/project/gradient-adk/)
 [![Docs](https://img.shields.io/badge/Docs-8A2BE2)](https://docs.digitalocean.com/products/gradient-ai-platform/how-to/build-agents-using-adk/)
 
-The DigitalOcean Gradient™ Agent Development Kit (ADK) is a Python toolkit designed to help you build, deploy, and operate production-grade AI agents with zero infrastructure overhead.
+The DigitalOcean Agent Development Kit (ADK) is a Python toolkit designed to help you build, deploy, and operate production-grade AI agents with zero infrastructure overhead.
 
-Building AI agents is challenging enough without worrying about observability, evaluations, and deployment infrastructure. We built the Gradient™ ADK with one simple aim: **bring your agent code, and we handle the rest**—bringing the simplicity you love about DigitalOcean to AI agents.
+Building AI agents is challenging enough without worrying about observability, evaluations, and deployment infrastructure. We built the ADK with one simple aim: **bring your agent code, and we handle the rest**—bringing the simplicity you love about DigitalOcean to AI agents.
 
-## Why Use DigitalOcean Gradient™ ADK?
+## Why Use DigitalOcean ADK?
 
 - **Framework Agnostic**: Bring your existing agent code—whether built with LangGraph, LangChain, CrewAI, PydanticAI, or any Python framework. No rewrites, no lock-in.
 
 - **Pay Per Use**: Only pay for what you use with serverless agent hosting. **Currently provided at no compute cost during Public Preview!**
 
-- **Any LLM Provider**: Use OpenAI, Anthropic, Google, or DigitalOcean's own Gradient™ AI serverless inference—your choice, your keys.
+- **Any LLM Provider**: Use OpenAI, Anthropic, Google, or DigitalOcean's serverless inference—your choice, your keys.
 
 - **Built-in Observability**: Get automatic traces, evaluations, and insights out of the box. No OpenTelemetry setup, no third-party integrations required.
 
@@ -310,7 +308,7 @@ async def main(input: dict, context: RequestContext):
 
 Traces are:
 
-- Automatically sent to DigitalOcean's Gradient Platform
+- Automatically sent to DigitalOcean's AI Platform
 - Available in real-time through the web console
 - Accessible via `gradient agent traces` command
 
@@ -320,7 +318,7 @@ Traces are:
 # Required for deployment and evaluations
 export DIGITALOCEAN_API_TOKEN=your_do_api_token
 
-# Required for Gradient serverless inference (if using)
+# Required for DigitalOcean serverless inference (if using)
 export GRADIENT_MODEL_ACCESS_KEY=your_gradient_key
 
 # Optional: Enable verbose trace logging
@@ -373,7 +371,7 @@ This is intentionally separate from `.gitignore` because that files you track in
 
 ## Framework Compatibility
 
-The Gradient ADK is designed to work with any Python-based AI agent framework:
+The ADK is designed to work with any Python-based AI agent framework:
 
 - ✅ **LangGraph** - Automatic trace capture (zero configuration)
 - ✅ **LangChain** - Use trace decorators (`@trace_llm`, `@trace_tool`, `@trace_retriever`) for custom spans
@@ -382,7 +380,7 @@ The Gradient ADK is designed to work with any Python-based AI agent framework:
 
 ## A2A Protocol Support
 
-The Gradient ADK supports the [Agent-to-Agent (A2A) protocol v0.3.0](https://github.com/google/A2A), enabling any `@entrypoint` agent to communicate with A2A-compatible clients. Install with `pip install gradient-adk[a2a]`.
+The ADK supports the [Agent-to-Agent (A2A) protocol v0.3.0](https://github.com/google/A2A), enabling any `@entrypoint` agent to communicate with A2A-compatible clients. Install with `pip install gradient-adk[a2a]`.
 
 ### Wrapping an Agent with A2A
 
@@ -489,7 +487,7 @@ Text-only input/output (`text/plain`) in the current release. Streaming, push no
 ## Support
 
 - **Templates/Examples**: [https://github.com/digitalocean/gradient-adk-templates](https://github.com/digitalocean/gradient-adk-templates)
-- **Gradient™ AI Platform**: [https://www.digitalocean.com/products/gradient/platform](https://www.digitalocean.com/products/gradient/platform)
+- **DigitalOcean AI Platform**: [https://www.digitalocean.com/products/gradient/platform](https://www.digitalocean.com/products/gradient/platform)
 - **Documentation**: [https://docs.digitalocean.com/products/gradient-ai-platform/how-to/build-agents-using-adk/](https://docs.digitalocean.com/products/gradient-ai-platform/how-to/build-agents-using-adk/)
 - **API Reference**: [https://docs.digitalocean.com/reference/api](https://docs.digitalocean.com/reference/api)
 - **Community**: [DigitalOcean Community Forums](https://www.digitalocean.com/community)
