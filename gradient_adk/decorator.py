@@ -34,6 +34,7 @@ def _build_request_context(req: Request) -> RequestContext:
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse as FastAPIStreamingResponse
+from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 import uvicorn
 
 from .logging import get_logger
@@ -105,10 +106,7 @@ class _StreamingIteratorWithTracking:
             return
 
         try:
-            self._tracker._req["outputs"] = "".join(self._collected)
-            if error:
-                self._tracker._req["error"] = error
-            await self._tracker._submit()
+            self._tracker.on_request_end(outputs="".join(self._collected), error=error)
         except Exception:
             # Never break streaming due to tracking errors
             pass
@@ -164,10 +162,12 @@ def entrypoint(func: Callable) -> Callable:
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
 
-        is_evaluation = "evaluation-id" in req.headers
+        evaluation_run_uuid = req.headers.get("evaluation-id")
+        is_evaluation = evaluation_run_uuid is not None
 
         context = _build_request_context(req)
         session_id = context.session_id
+        parent_context = TraceContextTextMapPropagator().extract(context.headers)
 
         # Initialize tracker
         tr = None
@@ -179,6 +179,8 @@ def entrypoint(func: Callable) -> Callable:
                     body,
                     is_evaluation=is_evaluation,
                     session_id=session_id,
+                    parent_context=parent_context,
+                    evaluation_run_uuid=evaluation_run_uuid,
                 )
         except Exception:
             pass
@@ -222,7 +224,7 @@ def entrypoint(func: Callable) -> Callable:
                     trace_id = None
                     if tr:
                         try:
-                            tr._req["outputs"] = result
+                            tr.on_request_end(outputs=result, error=None)
                             trace_id = await tr.submit_and_get_trace_id()
                         except Exception:
                             pass
@@ -233,9 +235,9 @@ def entrypoint(func: Callable) -> Callable:
                 except Exception as e:
                     if tr:
                         try:
-                            tr._req["outputs"] = "".join(collected_chunks)
-                            tr._req["error"] = str(e)
-                            await tr._submit()
+                            tr.on_request_end(
+                                outputs="".join(collected_chunks), error=str(e)
+                            )
                         except Exception:
                             pass
                     logger.error(

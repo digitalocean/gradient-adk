@@ -249,6 +249,8 @@ def _trace_base(
                             )
                             if captured:
                                 call = captured[0]
+                                if call.url:
+                                    meta["llm_url"] = call.url
                                 if call.request_payload:
                                     meta["llm_request_payload"] = call.request_payload
                                 if call.response_payload:
@@ -313,6 +315,8 @@ def _trace_base(
                             )
                             if captured:
                                 call = captured[0]
+                                if call.url:
+                                    meta["llm_url"] = call.url
                                 if call.request_payload:
                                     meta["llm_request_payload"] = call.request_payload
                                 if call.response_payload:
@@ -414,6 +418,8 @@ def _trace_base(
                             )
                             if captured:
                                 call = captured[0]
+                                if call.url:
+                                    meta["llm_url"] = call.url
                                 if call.request_payload:
                                     meta["llm_request_payload"] = call.request_payload
                                 if call.response_payload:

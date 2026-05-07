@@ -15,7 +15,10 @@ from typing import Optional, Callable, Dict, Any, Protocol
 from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigManager
 from gradient_adk.runtime.digitalocean_tracker import DigitalOceanTracesTracker
 from gradient_adk.digital_ocean_api import AsyncDigitalOceanGenAI
+from gradient_adk.runtime.multi_tracker import MultiTracker
 from gradient_adk.runtime.network_interceptor import setup_digitalocean_interception
+from gradient_adk.runtime.otel_setup import env_bool
+from gradient_adk.runtime.otlp_tracker import OTLPTracesTracker
 
 
 def _is_tracing_disabled() -> bool:
@@ -27,7 +30,7 @@ def _is_tracing_disabled() -> bool:
 class InstrumentorProtocol(Protocol):
     """Protocol for instrumentor classes."""
 
-    def install(self, tracker: DigitalOceanTracesTracker) -> None:
+    def install(self, tracker: Any) -> None:
         """Install the instrumentor with the given tracker."""
         ...
 
@@ -65,7 +68,7 @@ class InstrumentorRegistry:
     """
 
     def __init__(self):
-        self._tracker: Optional[DigitalOceanTracesTracker] = None
+        self._tracker: Optional[Any] = None
         self._instrumentors: Dict[str, InstrumentorProtocol] = {}
         self._registrations: Dict[str, Dict[str, Any]] = {}
         self._config_reader = YamlAgentConfigManager()
@@ -76,7 +79,7 @@ class InstrumentorRegistry:
         val = os.environ.get(env_var, "").lower()
         return val in ("true", "1", "yes")
 
-    def _ensure_tracker(self) -> Optional[DigitalOceanTracesTracker]:
+    def _ensure_tracker(self) -> Optional[Any]:
         """
         Create the shared tracker if not already created.
 
@@ -99,17 +102,41 @@ class InstrumentorRegistry:
                 return None
 
             api_token = os.environ.get("DIGITALOCEAN_API_TOKEN")
-            if not api_token:
+            galileo_enabled = env_bool(
+                "DIGITALOCEAN_GALILEO_WRITE_ENABLED", default=True
+            )
+            otlp_enabled = env_bool("DIGITALOCEAN_OTLP_WRITE_ENABLED", default=False)
+            if not api_token and not otlp_enabled:
                 return None
 
             ws = self._config_reader.get_agent_name()
             dep = self._config_reader.get_agent_environment()
 
-            self._tracker = DigitalOceanTracesTracker(
-                client=AsyncDigitalOceanGenAI(api_token=api_token),
-                agent_workspace_name=ws,
-                agent_deployment_name=dep,
-            )
+            trackers: list[Any] = []
+            if galileo_enabled and api_token:
+                trackers.append(
+                    DigitalOceanTracesTracker(
+                        client=AsyncDigitalOceanGenAI(api_token=api_token),
+                        agent_workspace_name=ws,
+                        agent_deployment_name=dep,
+                    )
+                )
+            if otlp_enabled:
+                trackers.append(
+                    OTLPTracesTracker(
+                        client=(
+                            AsyncDigitalOceanGenAI(api_token=api_token)
+                            if api_token
+                            else None
+                        ),
+                        agent_workspace_name=ws,
+                        agent_deployment_name=dep,
+                    )
+                )
+            if not trackers:
+                return None
+
+            self._tracker = trackers[0] if len(trackers) == 1 else MultiTracker(trackers)
             setup_digitalocean_interception()
             return self._tracker
 
@@ -138,7 +165,7 @@ class InstrumentorRegistry:
             "instrumentor_factory": instrumentor_factory,
         }
 
-    def install(self, name: str) -> Optional[DigitalOceanTracesTracker]:
+    def install(self, name: str) -> Optional[Any]:
         """
         Install a specific registered instrumentor.
 
@@ -175,7 +202,7 @@ class InstrumentorRegistry:
         except Exception:
             return None
 
-    def install_all(self) -> Optional[DigitalOceanTracesTracker]:
+    def install_all(self) -> Optional[Any]:
         """
         Install all registered instrumentors that are available.
 
@@ -199,7 +226,7 @@ class InstrumentorRegistry:
         for name in list(self._instrumentors.keys()):
             self.uninstall(name)
 
-    def get_tracker(self) -> Optional[DigitalOceanTracesTracker]:
+    def get_tracker(self) -> Optional[Any]:
         """Get the shared tracker instance."""
         return self._tracker
 
@@ -216,7 +243,7 @@ class InstrumentorRegistry:
 registry = InstrumentorRegistry()
 
 
-def get_tracker() -> Optional[DigitalOceanTracesTracker]:
+def get_tracker() -> Optional[Any]:
     """Get the shared tracker from the global registry."""
     return registry.get_tracker()
 
@@ -310,7 +337,7 @@ def register_all_instrumentors() -> None:
     _register_crewai()
 
 
-def capture_all() -> Optional[DigitalOceanTracesTracker]:
+def capture_all() -> Optional[Any]:
     """
     Register and install all available instrumentors.
 
