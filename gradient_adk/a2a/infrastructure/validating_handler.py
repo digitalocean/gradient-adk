@@ -9,8 +9,7 @@ from typing import Any
 
 from a2a.server.request_handlers import DefaultRequestHandler
 from a2a.server.context import ServerCallContext
-from a2a.types import Message, Task, MessageSendParams, FilePart, DataPart, InvalidParamsError
-from a2a.utils.errors import ServerError
+from a2a.types import AgentCard, Message, Task, SendMessageRequest, InvalidParamsError
 
 from gradient_adk.a2a.domain.validation import MessageValidator
 from gradient_adk.a2a.domain.models import DomainMessage, MessageRole
@@ -32,7 +31,13 @@ class ValidatingRequestHandler(DefaultRequestHandler):
     - Executor can assume input is valid
     """
 
-    def __init__(self, agent_executor: Any, task_store: Any, validator: MessageValidator):
+    def __init__(
+        self,
+        agent_executor: Any,
+        task_store: Any,
+        agent_card: AgentCard,
+        validator: MessageValidator,
+    ):
         """
         Initialize validating request handler.
 
@@ -41,12 +46,12 @@ class ValidatingRequestHandler(DefaultRequestHandler):
             task_store: The task store for persistence
             validator: Domain validator for business rules
         """
-        super().__init__(agent_executor, task_store)
+        super().__init__(agent_executor, task_store, agent_card)
         self.validator = validator
 
     async def on_message_send(
         self,
-        params: MessageSendParams,
+        params: SendMessageRequest,
         context: ServerCallContext | None = None,
     ) -> Message | Task:
         """
@@ -79,7 +84,7 @@ class ValidatingRequestHandler(DefaultRequestHandler):
         if validation_result.is_err():
             error = validation_result.error
             error_message = f"[{error.code}] {error.message}"
-            raise ServerError(InvalidParamsError(message=error_message))
+            raise InvalidParamsError(message=error_message)
 
         return await super().on_message_send(params, context)
 
@@ -94,14 +99,18 @@ class ValidatingRequestHandler(DefaultRequestHandler):
             Domain message with extracted text and part flags
         """
         text_parts = [
-            part.root.text
+            part.text
             for part in message.parts
-            if hasattr(part.root, 'text')
+            if part.WhichOneof("content") == "text"
         ]
         text = " ".join(text_parts) if text_parts else ""
 
-        has_file = any(isinstance(part.root, FilePart) for part in message.parts)
-        has_data = any(isinstance(part.root, DataPart) for part in message.parts)
+        has_file = any(
+            part.WhichOneof("content") in {"raw", "url"} for part in message.parts
+        )
+        has_data = any(
+            part.WhichOneof("content") == "data" for part in message.parts
+        )
 
         return DomainMessage(
             text=text,

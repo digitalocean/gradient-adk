@@ -3,6 +3,7 @@
 from typing import Any
 
 from a2a.server.tasks import InMemoryTaskStore
+from a2a.types import AgentCard
 
 from gradient_adk.a2a.domain.validation import MessageValidator
 from gradient_adk.a2a.domain.transformation import MessageTransformer, OutputExtractor
@@ -48,6 +49,7 @@ def compose_executor(
 
 def compose_request_handler(
     agent_func: Any,
+    agent_card: AgentCard,
     input_key: str = "prompt",
     output_keys: list[str] | None = None,
 ) -> ValidatingRequestHandler:
@@ -78,5 +80,6 @@ def compose_request_handler(
     return ValidatingRequestHandler(
         agent_executor=executor,
         task_store=InMemoryTaskStore(),
+        agent_card=agent_card,
         validator=validator,
     )

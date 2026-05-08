@@ -3,10 +3,15 @@
 from a2a.server.tasks import TaskUpdater
 from a2a.server.events import EventQueue
 from a2a.types import TaskState
-from a2a.utils import new_agent_text_message
+from a2a.helpers import new_text_message
 
 from gradient_adk.a2a.domain.models import DomainMessage, ValidationError, TransformationError
 from gradient_adk.a2a.domain.ports import EventPort
+
+
+TASK_STATE_COMPLETED = TaskState.Value("TASK_STATE_COMPLETED")
+TASK_STATE_FAILED = TaskState.Value("TASK_STATE_FAILED")
+TASK_STATE_CANCELED = TaskState.Value("TASK_STATE_CANCELED")
 
 
 class A2AEventPublisher:
@@ -29,14 +34,14 @@ class A2AEventPublisher:
         message: DomainMessage,
     ) -> None:
         """Publish task completion."""
-        sdk_message = new_agent_text_message(
+        sdk_message = new_text_message(
             text=message.text,
             context_id=self.context_id,
             task_id=task_id,
         )
 
         await self.task_updater.update_status(
-            TaskState.completed,
+            TASK_STATE_COMPLETED,
             message=sdk_message,
         )
 
@@ -47,17 +52,17 @@ class A2AEventPublisher:
     ) -> None:
         """Publish task failure."""
         error_text = f"Agent error: {error.message}"
-        sdk_message = new_agent_text_message(
+        sdk_message = new_text_message(
             text=error_text,
             context_id=self.context_id,
             task_id=task_id,
         )
 
         await self.task_updater.update_status(
-            TaskState.failed,
+            TASK_STATE_FAILED,
             message=sdk_message,
         )
 
     async def publish_canceled(self, task_id: str) -> None:
         """Publish task cancellation."""
-        await self.task_updater.update_status(TaskState.canceled)
+        await self.task_updater.update_status(TASK_STATE_CANCELED)

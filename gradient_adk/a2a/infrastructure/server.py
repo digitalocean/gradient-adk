@@ -3,9 +3,10 @@
 import os
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 
-from a2a.server.apps.jsonrpc import A2AFastAPIApplication
+from a2a.server.routes import create_jsonrpc_routes
 from a2a.types import AgentCard, AgentCapabilities
 
 from gradient_adk.a2a.infrastructure.composition import compose_request_handler
@@ -72,13 +73,10 @@ def create_a2a_server(
         name=agent_name,
         version=A2A_PROTOCOL_VERSION,
         description="A2A-enabled Gradient agent",
-        url=base_url,
         capabilities=AgentCapabilities(
             streaming=False,
             push_notifications=False,
-            state_transition_history=True,
         ),
-        supports_authenticated_extended_card=False,
         default_input_modes=["text/plain"],
         default_output_modes=["text/plain"],
         skills=[],
@@ -86,16 +84,56 @@ def create_a2a_server(
 
     request_handler = compose_request_handler(
         agent_func,
+        agent_card=agent_card,
         input_key=input_key,
         output_keys=output_keys,
     )
 
-    app_builder = A2AFastAPIApplication(
-        agent_card=agent_card,
-        http_handler=request_handler,
-    )
-
-    return app_builder.build(
+    app = FastAPI()
+    jsonrpc_routes = create_jsonrpc_routes(
+        request_handler=request_handler,
         rpc_url=rpc_url,
-        agent_card_url=agent_card_url
+        enable_v0_3_compat=True,
     )
+    jsonrpc_endpoint = jsonrpc_routes[0].endpoint
+
+    @app.post(rpc_url)
+    async def handle_jsonrpc(request: Request):
+        body = await request.json()
+        if body.get("method") == "message/stream":
+            return JSONResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": body.get("id"),
+                    "error": {
+                        "code": -32603,
+                        "message": "Streaming is not supported by the agent",
+                    },
+                }
+            )
+        return await jsonrpc_endpoint(request)
+
+    @app.get(agent_card_url)
+    async def get_agent_card():
+        # Serve a compatibility shape that matches the contract exercised by the
+        # repo's A2A tests while sourcing the core values from the SDK proto.
+        return JSONResponse(
+            {
+                "name": agent_card.name,
+                "version": agent_card.version,
+                "description": agent_card.description,
+                "url": base_url,
+                "capabilities": {
+                    "streaming": bool(agent_card.capabilities.streaming),
+                    "pushNotifications": bool(
+                        agent_card.capabilities.push_notifications
+                    ),
+                    "stateTransitionHistory": True,
+                },
+                "defaultInputModes": list(agent_card.default_input_modes),
+                "defaultOutputModes": list(agent_card.default_output_modes),
+                "skills": list(agent_card.skills),
+            }
+        )
+
+    return app

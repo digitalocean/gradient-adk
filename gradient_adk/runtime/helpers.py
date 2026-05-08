@@ -10,7 +10,9 @@ that handles:
 """
 
 from __future__ import annotations
+import importlib.util
 import os
+import warnings
 from typing import Optional, Callable, Dict, Any, Protocol
 from gradient_adk.cli.config.yaml_agent_config_manager import YamlAgentConfigManager
 from gradient_adk.runtime.digitalocean_tracker import DigitalOceanTracesTracker
@@ -256,17 +258,26 @@ def _register_langgraph() -> None:
     """Register LangGraph instrumentor if available."""
 
     def is_available() -> bool:
-        try:
-            from langgraph.graph import StateGraph
-
-            return True
-        except ImportError:
-            return False
+        return importlib.util.find_spec("langgraph.graph") is not None
 
     def factory():
-        from gradient_adk.runtime.langgraph.langgraph_instrumentor import (
-            LangGraphInstrumentor,
-        )
+        with warnings.catch_warnings():
+            try:
+                from langchain_core._api.deprecation import (
+                    LangChainPendingDeprecationWarning,
+                )
+
+                warnings.simplefilter(
+                    "ignore", category=LangChainPendingDeprecationWarning
+                )
+            except Exception:
+                warnings.filterwarnings(
+                    "ignore",
+                    message=r"The default value of `allowed_objects` will change.*",
+                )
+            from gradient_adk.runtime.langgraph.langgraph_instrumentor import (
+                LangGraphInstrumentor,
+            )
 
         return LangGraphInstrumentor()
 
@@ -282,12 +293,7 @@ def _register_pydanticai() -> None:
     """Register PydanticAI instrumentor if available."""
 
     def is_available() -> bool:
-        try:
-            from pydantic_ai import Agent
-
-            return True
-        except ImportError:
-            return False
+        return importlib.util.find_spec("pydantic_ai") is not None
 
     def factory():
         from gradient_adk.runtime.pydanticai.pydanticai_instrumentor import (
@@ -308,12 +314,7 @@ def _register_crewai() -> None:
     """Register CrewAI instrumentor if available."""
 
     def is_available() -> bool:
-        try:
-            from crewai import Crew
-
-            return True
-        except ImportError:
-            return False
+        return importlib.util.find_spec("crewai") is not None
 
     def factory():
         from gradient_adk.runtime.crewai.crewai_instrumentor import (
