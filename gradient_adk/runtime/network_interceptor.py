@@ -7,6 +7,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 
 import httpx
+from opentelemetry.propagate import inject
 import requests
 
 
@@ -440,8 +441,30 @@ def create_adk_user_agent_hook(version: str, url_patterns: List[str]) -> Request
     return hook
 
 
+def create_trace_context_hook(url_patterns: List[str]) -> RequestHook:
+    """Inject W3C trace context into tracked outbound requests."""
+
+    def hook(url: str, headers: Dict[str, str]) -> Dict[str, str]:
+        if not any(pattern in url for pattern in url_patterns):
+            return headers
+
+        injected_headers = dict(headers)
+        inject(injected_headers)
+        return injected_headers
+
+    return hook
+
+
 # URL classification helpers for different DigitalOcean services
-INFERENCE_URL_PATTERNS = ["inference.do-ai.run", "inference.do-ai-test.run"]
+INFERENCE_URL_PATTERNS = [
+    "inference.do-ai.run",
+    "inference.do-ai-test.run",
+    "api.openai.com",
+    "api.anthropic.com",
+    "generativelanguage.googleapis.com",
+    "api.cohere.ai",
+    "api.x.ai",
+]
 KBAAS_URL_PATTERNS = ["kbaas.do-ai.run", "kbaas.do-ai-test.run"]
 
 
@@ -491,5 +514,6 @@ def setup_digitalocean_interception() -> None:
         url_patterns=all_patterns,
     )
     intr.add_request_hook(ua_hook)
+    intr.add_request_hook(create_trace_context_hook(url_patterns=all_patterns))
 
     intr.start_intercepting()

@@ -142,6 +142,8 @@ class DigitalOceanTracesTracker:
         inputs: Dict[str, Any],
         is_evaluation: bool = False,
         session_id: Optional[str] = None,
+        parent_context: Any = None,
+        evaluation_run_uuid: Optional[str] = None,
     ) -> contextvars.Token:
         """Start tracking a new request.
         

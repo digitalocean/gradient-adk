@@ -1,6 +1,7 @@
 import asyncio
 import pytest
 from fastapi.testclient import TestClient
+from opentelemetry import trace
 
 from gradient_adk.decorator import entrypoint, run_server, RequestContext
 import gradient_adk.decorator as entrypoint_mod
@@ -33,11 +34,32 @@ class TrackerDouble:
         self._req = {}
         self._session_id = None
         self._submitted_trace_id = None
+        self._parent_context = None
+        self._evaluation_run_uuid = None
 
-    def on_request_start(self, name, inputs, is_evaluation=False, session_id=None):
-        self.started.append((name, inputs, is_evaluation, session_id))
+    def on_request_start(
+        self,
+        name,
+        inputs,
+        is_evaluation=False,
+        session_id=None,
+        parent_context=None,
+        evaluation_run_uuid=None,
+    ):
+        self.started.append(
+            (
+                name,
+                inputs,
+                is_evaluation,
+                session_id,
+                parent_context,
+                evaluation_run_uuid,
+            )
+        )
         self._req = {"entrypoint": name, "inputs": inputs}
         self._session_id = session_id
+        self._parent_context = parent_context
+        self._evaluation_run_uuid = evaluation_run_uuid
 
     def on_request_end(self, outputs=None, error=None):
         self.ended.append((outputs, error))
@@ -723,7 +745,7 @@ def test_session_id_passed_to_tracker(patch_helpers):
 
     # Verify that session_id was passed to the tracker
     assert tracker.started
-    # started tuple is (name, inputs, is_evaluation, session_id)
+    # started tuple is (name, inputs, is_evaluation, session_id, parent_context, evaluation_run_uuid)
     assert tracker.started[-1][3] == "trace-session-456"
     assert tracker._session_id == "trace-session-456"
 
@@ -745,3 +767,39 @@ def test_session_id_none_passed_to_tracker_when_no_header(patch_helpers):
     assert tracker.started
     assert tracker.started[-1][3] is None
     assert tracker._session_id is None
+
+
+def test_traceparent_header_is_extracted_and_passed_to_tracker(patch_helpers):
+    """Test that traceparent is extracted into a parent context for the tracker."""
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        return {"ok": True}
+
+    fastapi_app = globals()["fastapi_app"]
+    traceparent = "00-1234567890abcdef1234567890abcdef-1234567890abcdef-01"
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"traceparent": traceparent})
+        assert r.status_code == 200
+
+    parent_span = trace.get_current_span(tracker._parent_context)
+    assert parent_span.get_span_context().trace_id == int(
+        "1234567890abcdef1234567890abcdef", 16
+    )
+
+
+def test_evaluation_id_is_forwarded_as_evaluation_run_uuid(patch_helpers):
+    """Test that evaluation-id is forwarded to the tracker as evaluation_run_uuid."""
+    tracker = patch_helpers
+
+    @entrypoint
+    def handler(data, context):
+        return {"ok": True}
+
+    fastapi_app = globals()["fastapi_app"]
+    with TestClient(fastapi_app) as client:
+        r = client.post("/run", json={"test": 1}, headers={"evaluation-id": "eval-789"})
+        assert r.status_code == 200
+
+    assert tracker._evaluation_run_uuid == "eval-789"

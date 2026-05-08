@@ -15,6 +15,7 @@ from gradient_adk.runtime.helpers import (
     _register_crewai,
     _is_tracing_disabled,
 )
+from gradient_adk.runtime.otlp_tracker import OTLPTracesTracker
 
 
 # -----------------------------
@@ -77,6 +78,31 @@ def test_install_without_api_token_returns_none(fresh_registry, mock_instrumento
 
     assert result is None
     mock_instrumentor.install.assert_not_called()
+
+
+def test_install_with_otlp_enabled_without_api_token_returns_otlp_tracker(
+    fresh_registry, mock_instrumentor
+):
+    """OTLP-only mode should still create a tracker without a DO API token."""
+    fresh_registry.register(
+        name="test",
+        env_disable_var="TEST_DISABLE",
+        availability_check=lambda: True,
+        instrumentor_factory=lambda: mock_instrumentor,
+    )
+
+    with patch.dict(os.environ, {"DIGITALOCEAN_OTLP_WRITE_ENABLED": "true"}, clear=True):
+        with patch(
+            "gradient_adk.runtime.helpers.YamlAgentConfigManager.get_agent_name",
+            return_value="workspace-a",
+        ), patch(
+            "gradient_adk.runtime.helpers.YamlAgentConfigManager.get_agent_environment",
+            return_value="prod",
+        ):
+            result = fresh_registry.install("test")
+
+    assert isinstance(result, OTLPTracesTracker)
+    mock_instrumentor.install.assert_called_once()
 
 
 def test_install_when_disabled_returns_none(fresh_registry, mock_instrumentor):
@@ -304,8 +330,12 @@ def test_pydanticai_availability_check():
 
     check = test_registry._registrations["pydanticai"]["availability_check"]
 
-    # Since we're running tests with pydantic-ai installed, it should be available
-    assert check() is True
+    try:
+        from pydantic_ai import Agent  # noqa: F401
+
+        assert check() is True
+    except ImportError:
+        assert check() is False
 
 
 def test_crewai_availability_check():

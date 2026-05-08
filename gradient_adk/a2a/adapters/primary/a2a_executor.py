@@ -2,6 +2,7 @@
 
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
+from a2a.helpers import new_task_from_user_message
 
 from gradient_adk.a2a.domain.models import GradientOutput, TransformationError
 from gradient_adk.a2a.domain.transformation import MessageTransformer, OutputExtractor
@@ -56,6 +57,9 @@ class A2AExecutorAdapter(AgentExecutor):
             and publishes failure event before re-raising to maintain exception
             propagation.
         """
+        if context.current_task is None and context.message is not None:
+            await event_queue.enqueue_event(new_task_from_user_message(context.message))
+
         event_publisher = self.event_publisher_factory(
             event_queue,
             context.context_id,

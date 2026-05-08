@@ -28,4 +28,4 @@ __all__ = [
     "add_agent_span",
 ]
 
-__version__ = "0.0.5"
+__version__ = "0.0.8"
