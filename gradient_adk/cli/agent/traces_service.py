@@ -232,6 +232,24 @@ class GalileoTracesService:
         deployment = deployment_output.agent_workspace_deployment
         logging_config = deployment.logging_config
 
+        # AAPP-1104: a deployment created during a Galileo outage may carry
+        # logging_config = None (or partially-populated fields). The Traces
+        # console URL needs both project_id and log_stream_id to be present,
+        # so surface a clean message to the operator instead of crashing on
+        # attribute access.
+        if (
+            logging_config is None
+            or not logging_config.galileo_project_id
+            or not logging_config.log_stream_id
+        ):
+            raise ValueError(
+                f"Tracing is not provisioned for agent deployment "
+                f"'{agent_deployment_name}' in workspace '{agent_workspace_name}'. "
+                "This usually means the deployment was created while the tracing "
+                "service was unavailable. Retry once Galileo is healthy, or "
+                "redeploy the agent."
+            )
+
         # Get tracing token using workspace UUID
         tracing_token: TracingServiceJWTOutput = await self.client.get_tracing_token(
             agent_workspace_uuid=workspace_uuid,

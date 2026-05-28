@@ -256,14 +256,28 @@ class AgentDeploymentRelease(BaseModel):
 class AgentLoggingConfig(BaseModel):
     """
     Represents Agent Logging Config Details.
+
+    AAPP-1104: every Galileo-derived field is now Optional. The backend may
+    return an AgentLoggingConfig with these fields unset when an agent or
+    deployment was created during a Galileo outage and provisioning was
+    deferred. Callers must handle the None case explicitly (see TracesService
+    for the canonical pattern) and not assume the fields are populated.
     """
 
     model_config = ConfigDict(populate_by_name=True, extra="allow")
 
-    galileo_project_id: str = Field(..., description="Galileo project identifier")
-    galileo_project_name: str = Field(..., description="Name of the Galileo project")
-    log_stream_id: str = Field(..., description="Identifier for the log stream")
-    log_stream_name: str = Field(..., description="Name of the log stream")
+    galileo_project_id: Optional[str] = Field(
+        None, description="Galileo project identifier"
+    )
+    galileo_project_name: Optional[str] = Field(
+        None, description="Name of the Galileo project"
+    )
+    log_stream_id: Optional[str] = Field(
+        None, description="Identifier for the log stream"
+    )
+    log_stream_name: Optional[str] = Field(
+        None, description="Name of the log stream"
+    )
     insights_enabled_at: Optional[datetime] = Field(
         None, description="Timestamp when insights were enabled (RFC3339 timestamp)"
     )
