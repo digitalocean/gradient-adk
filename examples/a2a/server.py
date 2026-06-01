@@ -6,8 +6,8 @@ accessed via the A2A protocol using the Gradient ADK.
 To run this agent:
 1. Ensure you have gradient-adk and a2a-sdk installed:
    pip install gradient-adk[a2a]
-2. Set the base URL for discovery (optional, defaults to localhost for dev):
-   export A2A_BASE_URL=https://your-app.ondigitalocean.app
+2. When deployed, set the A2A base URL (invoke URL without /run; optional for local dev):
+   export A2A_BASE_URL=https://agents.do-ai.run/<workspace-uuid>/<deployment-name>
 3. Run: gradient agent run
 4. The agent will be available with both Gradient and A2A protocols
 """

@@ -324,8 +324,8 @@ export GRADIENT_MODEL_ACCESS_KEY=your_gradient_key
 # Optional: Enable verbose trace logging
 export GRADIENT_VERBOSE=1
 
-# Optional: A2A protocol — base URL for AgentCard discovery
-export A2A_BASE_URL=https://your-app.ondigitalocean.app
+# Optional: A2A — deployment base URL (invoke URL with trailing /run removed)
+export A2A_BASE_URL=https://agents.do-ai.run/<workspace-uuid>/<deployment-name>
 ```
 
 ## Project Structure
@@ -380,7 +380,7 @@ The ADK is designed to work with any Python-based AI agent framework:
 
 ## A2A Protocol Support
 
-The ADK supports the [Agent-to-Agent (A2A) protocol v0.3.0](https://github.com/google/A2A), enabling any `@entrypoint` agent to communicate with A2A-compatible clients. Install with `pip install gradient-adk[a2a]`.
+The ADK supports the [Agent-to-Agent (A2A) protocol v0.3.0](https://a2a-protocol.org/v0.3.0/specification/) ([protocol repository](https://github.com/a2aproject/A2A)), enabling any `@entrypoint` agent to communicate with A2A-compatible clients. Install with `pip install gradient-adk[a2a]`.
 
 ### Wrapping an Agent with A2A
 
@@ -425,17 +425,39 @@ Client                                 Server
   └── POST / tasks/cancel ──────────────►  Best-effort cancellation
 ```
 
-### Deploying to DigitalOcean App Platform
+### Configuring the public URL
 
-When you deploy to App Platform, the public URL is assigned after deployment. The A2A server needs this URL for the AgentCard so that clients know where to send requests. The workflow is:
+Deployed agents expose two related URLs on `agents.do-ai.run`:
 
-1. **Deploy your agent** to App Platform as usual with `gradient agent deploy`
-2. **Get your app's public URL** from the App Platform dashboard (e.g., `https://your-agent-abc123.ondigitalocean.app`)
-3. **Set the environment variable** in your app's settings:
-   ```bash
-   A2A_BASE_URL=https://your-agent-abc123.ondigitalocean.app
-   ```
-4. **Redeploy** — the agent restarts and the AgentCard now advertises the correct public URL
+| Purpose | URL | HTTP |
+| --- | --- | --- |
+| Gradient invoke (`@entrypoint`) | `https://agents.do-ai.run/<workspace-uuid>/<deployment-name>/run` | `POST` with `{"prompt": "..."}` |
+| A2A discovery | `https://agents.do-ai.run/<workspace-uuid>/<deployment-name>/.well-known/agent-card.json` | `GET` |
+| A2A JSON-RPC | `https://agents.do-ai.run/<workspace-uuid>/<deployment-name>/` | `POST` (`message/send`, `tasks/get`, …) |
+
+Example invoke URL:
+
+```
+https://agents.do-ai.run/00f7470e-1310-49ef-baea-0addf60a6594/test-deploy/run
+```
+
+Set `A2A_BASE_URL` to the invoke URL **without** the trailing `/run`. That value is written to the AgentCard `url` field and is where clients send JSON-RPC requests (not the `/run` endpoint):
+
+```bash
+# From: .../test-deploy/run  →  A2A_BASE_URL: .../test-deploy
+export A2A_BASE_URL=https://agents.do-ai.run/00f7470e-1310-49ef-baea-0addf60a6594/test-deploy
+```
+
+After `gradient agent deploy`, remove `/run` from the printed invoke URL to get `A2A_BASE_URL` (the CLI may include a `/v1/` segment in the path — keep it when stripping `/run`).
+
+You can also pass `base_url` when creating the server:
+
+```python
+app = create_a2a_server(
+    my_agent,
+    base_url="https://agents.do-ai.run/00f7470e-1310-49ef-baea-0addf60a6594/test-deploy",
+)
+```
 
 For local development, no configuration is needed — it defaults to `http://localhost:8000`.
 
@@ -446,9 +468,11 @@ Once deployed, any A2A-compatible agent or client can call your agent:
 ```python
 import httpx
 
-# Discover the remote agent
-card = httpx.get("https://your-agent.ondigitalocean.app/.well-known/agent-card.json").json()
-rpc_url = card["url"]
+# Discover the remote agent (base URL = invoke URL without /run)
+invoke_url = "https://agents.do-ai.run/00f7470e-1310-49ef-baea-0addf60a6594/test-deploy/run"
+agent_base = invoke_url.removesuffix("/run")
+card = httpx.get(f"{agent_base}/.well-known/agent-card.json").json()
+rpc_url = card["url"]  # same as agent_base when A2A_BASE_URL is set correctly
 
 # Send a message
 response = httpx.post(rpc_url, json={
@@ -473,7 +497,7 @@ result = httpx.post(rpc_url, json={
 }).json()["result"]
 ```
 
-See `examples/a2a/client.py` for a complete async client with discovery, send, poll, and cancel.
+See [examples/a2a/client.py](https://github.com/digitalocean/gradient-adk/blob/main/examples/a2a/client.py) for a complete async client with discovery, send, poll, and cancel.
 
 ### Supported Operations
 
