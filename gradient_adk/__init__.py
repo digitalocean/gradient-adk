@@ -14,6 +14,7 @@ from .tracing import (
     add_tool_span,
     add_agent_span,
 )
+from .guardrails import Guardrails
 
 __all__ = [
     "entrypoint",
@@ -26,6 +27,8 @@ __all__ = [
     "add_llm_span",
     "add_tool_span",
     "add_agent_span",
+    # Guardrails
+    "Guardrails",
 ]
 
 __version__ = "0.0.8"
