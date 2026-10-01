@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "gradient-adk"
 version = "0.0.8"
-description = "DigitalOcean Agent Development Kit"
+description = "DEPRECATED: DigitalOcean Agent Development Kit — no longer maintained"
 requires-python = ">=3.10"
 readme = "README.md"
 license = "Apache-2.0"

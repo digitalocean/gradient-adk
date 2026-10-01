@@ -1,3 +1,15 @@
+# **WARNING: This package is deprecated and no longer maintained.**
+
+## Package deprecated
+
+**`gradient-adk` (including the `gradient` CLI) is deprecated.** DigitalOcean is ending distribution, documentation, and ongoing maintenance for this package.
+
+- **PyPI:** [`gradient-adk`](https://pypi.org/project/gradient-adk/)
+- **Already-installed copies** can continue to run against existing deployments; new installs and official support for this package are ending.
+- For current DigitalOcean AI / agent platform documentation, see: https://docs.digitalocean.com/
+
+---
+
 # DigitalOcean Agent Development Kit (ADK)
 
 <!-- prettier-ignore -->
